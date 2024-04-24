@@ -22,6 +22,8 @@
 #include <executorch/extension/module/module.h>
 #include <executorch/extension/runner_util/managed_tensor.h>
 
+#include "moodycamel/blockingconcurrentqueue.h"
+
 namespace torch::executor {
 
 class Runner {
@@ -30,6 +32,14 @@ class Runner {
       const std::string& model_path,
       const std::string& tokenizer_path,
       const float temperature = 0.8f);
+
+  enum MsgType { USER, SYSTEM };
+
+  struct ReplMsg {
+    std::string msg;
+    std::string grammar;
+    std::string action;
+  };
 
   struct Stats {
     // Scaling factor for timestamps - in this case, we use ms.
@@ -64,7 +74,20 @@ class Runner {
       int32_t seq_len = 128,
       std::function<void(const std::string&)> token_callback = {},
       std::function<void(const Stats&)> stats_callback = {});
+
   void stop();
+
+  Error start_repl(
+      const std::string& prompt,
+      const std::string& antiPrompt,
+      std::function<void(const std::string&)> token_callback,
+      std::function<void(const Stats&)> stats_callback);
+
+  void repl_enqueue_message(
+      std::string msg,
+      MsgType type,
+      std::string grammar,
+      std::string action);
 
  private:
   // metadata
@@ -96,6 +119,12 @@ class Runner {
   std::unique_ptr<Sampler> sampler_;
   bool shouldStop_{false};
   Stats stats_;
+
+  // message queue for processing messages in REPL mode
+  moodycamel::BlockingConcurrentQueue<ReplMsg> messageQueue;
+
+  // message queue for system messages
+  moodycamel::BlockingConcurrentQueue<std::string> systemMessageQueue;
 };
 
 } // namespace torch::executor

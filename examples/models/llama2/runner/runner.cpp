@@ -218,6 +218,305 @@ Result<torch::executor::Tensor> Runner::run_model_step(
   }
 }
 
+void Runner::repl_enqueue_message(
+    std::string msg,
+    MsgType type,
+    std::string grammar,
+    std::string action) {
+  switch (type) {
+    case SYSTEM:
+      systemMessageQueue.enqueue(msg);
+      break;
+
+    default:
+      messageQueue.enqueue(ReplMsg{msg, grammar, action});
+      break;
+  }
+}
+
+Error Runner::start_repl(
+    const std::string& prompt,
+    const std::string& antiPrompt,
+    std::function<void(const std::string&)> token_callback,
+    std::function<void(const Stats&)> stats_callback) {
+  // Prepare the inputs.
+  // Use ones-initialized inputs.
+  ET_CHECK_MSG(!prompt.empty(), "Prompt cannot be null");
+  if (!is_loaded()) {
+    stats_.model_load_start_ms = util::time_in_ms();
+    ET_CHECK_OK_OR_RETURN_ERROR(load());
+    stats_.model_load_end_ms = util::time_in_ms();
+  }
+
+  // this is the context length
+  int seq_len = 2048;
+
+  // First token time only measures the time it takes to encode the prompt and
+  // return a response token.
+
+  stats_.inference_start_ms = util::time_in_ms();
+  shouldStop_ = false;
+
+  // Set the sequence length to the max seq length if not provided
+  seq_len = (seq_len > 0 && seq_len <= max_seq_len_) ? seq_len : max_seq_len_;
+
+  Result<std::vector<uint64_t>> encode_res =
+      tokenizer_->encode(prompt, n_bos_, append_eos_ ? n_eos_ : 0);
+
+  ET_CHECK_OK_OR_RETURN_ERROR(
+      encode_res.error(), "Failed to encode prompt %s", prompt.c_str());
+
+  // encode the (string) prompt into tokens sequence
+  std::vector<uint64_t> prompt_tokens = encode_res.get();
+  int num_prompt_tokens = prompt_tokens.size();
+
+  if (token_callback) {
+    token_callback("REPL_LOG:seq_len=" + std::to_string(seq_len) + "\n");
+    token_callback(
+        "REPL_LOG:max_seq_len_=" + std::to_string(max_seq_len_) + "\n");
+    token_callback(
+        "REPL_LOG:num_prompt_tokens=" + std::to_string(num_prompt_tokens) +
+        "\n");
+  }
+
+  if (num_prompt_tokens < 1) {
+    token_callback("REPL_ERROR:Expected at least 1 prompt token");
+    return Error::Ok;
+  }
+  if (num_prompt_tokens > max_seq_len_) {
+    token_callback("REPL_ERROR:Max context length exceeded for this model");
+    return Error::Ok;
+  }
+  if (num_prompt_tokens > seq_len) {
+    token_callback(
+        "REPL_ERROR:Prompt too long, increase the context length in your settings.");
+    return Error::Ok;
+  }
+
+  // start the main loop
+  int64_t pos = 0; // position in the sequence
+
+  std::vector<int64_t> token_data; // allocate space for the tokens
+  std::vector<exec_aten::SizesType> token_shape = {1, seq_len};
+
+  std::vector<int64_t> start_pos_data; // allocate space for the tokens
+  std::vector<exec_aten::SizesType> start_pos_shape = {1};
+
+  if (use_kv_cache_) {
+    // hard code these to size 1 as kv cache is locked to static size right now.
+    token_data.resize(1);
+    token_shape[1] = 1;
+    start_pos_data.resize(1);
+    start_pos_data.push_back(0);
+  } else {
+    // reserve data for tokens, notice the size is still 0 but the capacity is
+    // seq_len.
+    token_data.resize(seq_len);
+  }
+
+  // initialize tensor wrappers
+  ManagedTensor tokens_managed(
+      token_data.data(),
+      128, // TODO clean up unused 128 here as ManagedTensor ignores this arg in
+           // ctor
+      token_shape,
+      ScalarType::Long);
+  // Create with the max shape to approapriately set the capacity of this
+  // tensor, then resize back to 1 for first input.
+  tokens_managed.resize({1, 1});
+
+  ManagedTensor start_pos_managed(
+      start_pos_data.data(), 128, start_pos_shape, ScalarType::Long);
+
+  int64_t prev_token;
+  int64_t cur_token = prompt_tokens[0];
+
+  // If we arent using the kv cache then we can batch prefill the prompt
+  if (!use_kv_cache_) {
+    tokens_managed.resize({1, num_prompt_tokens});
+    for (int i = 0; i < num_prompt_tokens - 1; i++) {
+      tokens_managed.get_aliasing_tensor().mutable_data_ptr<int64_t>()[i] =
+          prompt_tokens[i];
+    }
+    // prefill tokens up to the last prompt token and then enter the loop with
+    // the last promp token as the current token.
+    cur_token = prompt_tokens[num_prompt_tokens - 1];
+    pos = num_prompt_tokens - 1;
+
+    // Print the prompt for consistent output between single token prefill and
+    // batch prefill.
+    uint64_t prev = prompt_tokens[0];
+    uint64_t cur;
+    for (int i = 1; i < num_prompt_tokens; i++) {
+      cur = prompt_tokens[i];
+      auto piece_res = tokenizer_->decode(prev, cur);
+      ET_CHECK_OK_OR_RETURN_ERROR(piece_res.error());
+      util::safe_printf(piece_res.get().c_str());
+      fflush(stdout);
+      prev = cur;
+    }
+  }
+
+  // configs
+  std::string input_prefix = "<|start_header_id|>user<|end_header_id|>\n\n";
+  std::string input_suffix =
+      "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
+
+  if (token_callback) {
+    token_callback("REPL_LOG:starting repl...\n");
+  }
+  std::string last_output = "";
+  bool processingInitialPrompt = true;
+
+  // Generate our tokens
+  bool done = false;
+  while (!done) {
+    // Run the model
+    Result<torch::executor::Tensor> logits_res =
+        run_model_step(cur_token, tokens_managed, start_pos_managed, seq_len);
+
+    if (pos == num_prompt_tokens) {
+      stats_.first_token_ms = util::time_in_ms();
+    } else if (pos == num_prompt_tokens - 1) {
+      stats_.prompt_eval_end_ms = util::time_in_ms();
+    }
+
+    ET_CHECK_OK_OR_RETURN_ERROR(logits_res.error());
+    exec_aten::Tensor& logits_tensor = logits_res.get();
+
+    prev_token = cur_token;
+
+    long sample_start_time_ms = util::time_in_ms();
+    switch (logits_tensor.scalar_type()) {
+      case ScalarType::Float: {
+        cur_token = logitsToToken<float>(logits_tensor, pos, 0);
+        break;
+      }
+      case ScalarType::Half: {
+        cur_token = logitsToToken<exec_aten::Half>(logits_tensor, pos, 0);
+        break;
+      }
+      default:
+        ET_CHECK_MSG(
+            false,
+            "Unsupported dtype output %hhd",
+            static_cast<int8_t>(logits_tensor.scalar_type()));
+    }
+    stats_.aggregate_sampling_time_ms +=
+        util::time_in_ms() - sample_start_time_ms;
+
+    bool wait_for_input = false;
+
+    // advance the state machine
+    if (pos < num_prompt_tokens - 1) {
+      // prefill, force the next token to be the next prompt token
+      cur_token = prompt_tokens[pos + 1];
+
+      token_callback(
+          "REPL_PROGRESS:" +
+          std::to_string((float)pos / (float)num_prompt_tokens));
+    } else {
+      // the first hit to this branch means we've finished the initial prompt
+      if (processingInitialPrompt) {
+        processingInitialPrompt = false;
+        wait_for_input = true;
+      } else {
+        // append cur_token to the prompt_tokens
+        prompt_tokens.push_back(cur_token);
+        num_prompt_tokens++;
+
+        // print the token as string, decode it with the Tokenizer object
+        auto piece_res = tokenizer_->decode(prev_token, cur_token);
+        ET_CHECK(piece_res.ok());
+
+        last_output += piece_res.get();
+
+        if (token_callback) {
+          token_callback("REPL_MSG:" + piece_res.get());
+        }
+
+        // check for anti prompt
+        bool is_antiprompt = false;
+        if (!antiPrompt.empty()) {
+          // Check if each of the reverse prompts appears at the end of the
+          // output
+          size_t search_start_pos =
+              last_output.length() > static_cast<size_t>(antiPrompt.length())
+              ? last_output.length() - static_cast<size_t>(antiPrompt.length())
+              : 0;
+
+          if (last_output.find(antiPrompt, search_start_pos) !=
+              std::string::npos) {
+            wait_for_input = true;
+          }
+        }
+
+        // we have hit EOS, wait for user input
+        if (cur_token == eos_id_) {
+          wait_for_input = true;
+        }
+      }
+    }
+    pos++;
+
+    if (wait_for_input) {
+      token_callback("REPL_READY:");
+
+      ReplMsg replMsg;
+      messageQueue.wait_dequeue(replMsg);
+
+      std::string message = replMsg.msg;
+
+      // we receive a special kill message here to end the repl
+      if (message == "###KILL###")
+        done = true;
+
+      // Add tokens to embd only if the input buffer is non-empty
+      if (message.length() > 0) {
+        // prepend input prefix if any
+        // if we are regenerating with message, this means we are appending
+        // the edited system/assistant message, so we don't add an input
+        // prefix
+        message = input_prefix + message + input_suffix;
+
+        // tokenize message without any bos or eos
+        Result<std::vector<uint64_t>> encode_res =
+            tokenizer_->encode(message, 0, 0);
+
+        ET_CHECK_OK_OR_RETURN_ERROR(
+            encode_res.error(), "Failed to encode prompt %s", prompt.c_str());
+
+        // extend prompt_tokens with the new encoded message
+        std::vector<uint64_t> new_tokens = encode_res.get();
+        prompt_tokens.insert(
+            prompt_tokens.end(), new_tokens.begin(), new_tokens.end());
+
+        // increase prompt token num
+        num_prompt_tokens += new_tokens.size();
+      }
+    }
+
+    if (shouldStop_) {
+      done = true;
+    }
+  }
+  stats_.inference_end_ms = util::time_in_ms();
+  printf("\n");
+
+  if (pos == seq_len) {
+    ET_LOG(Info, "Sequence length (%i tokens) reached!", seq_len);
+  }
+
+  stats_.num_prompt_tokens = num_prompt_tokens;
+  stats_.num_generated_tokens = pos - num_prompt_tokens;
+  printReport(stats_);
+  if (stats_callback) {
+    stats_callback(stats_);
+  }
+
+  return Error::Ok;
+}
+
 Error Runner::generate(
     const std::string& prompt,
     int32_t seq_len,
@@ -480,7 +779,8 @@ std::string statsToJsonString(const Runner::Stats& stats) {
      << "\"prompt_eval_end_ms\":" << stats.prompt_eval_end_ms << ","
      << "\"first_token_ms\":" << stats.first_token_ms << ","
      << "\"aggregate_sampling_time_ms\":" << stats.aggregate_sampling_time_ms
-     << "," << "\"SCALING_FACTOR_UNITS_PER_SECOND\":"
+     << ","
+     << "\"SCALING_FACTOR_UNITS_PER_SECOND\":"
      << stats.SCALING_FACTOR_UNITS_PER_SECOND << "}";
   return ss.str();
 }

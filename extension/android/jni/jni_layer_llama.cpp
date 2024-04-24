@@ -130,9 +130,34 @@ class ExecuTorchLlamaJni
       facebook::jni::alias_ref<ExecuTorchLlamaCallbackJni> callback) {
     runner_->generate(
         prompt->toStdString(),
-        128,
+        2048,
         [callback](std::string result) { callback->onResult(result); },
         [callback](const Runner::Stats& result) { callback->onStats(result); });
+    return 0;
+  }
+
+  jint repl_start(
+      facebook::jni::alias_ref<jstring> prompt,
+      facebook::jni::alias_ref<jstring> antiPrompt,
+      facebook::jni::alias_ref<ExecuTorchLlamaCallbackJni> callback) {
+    runner_->start_repl(
+        prompt->toStdString(),
+        antiPrompt->toStdString(),
+        [callback](std::string result) { callback->onResult(result); },
+        [callback](const Runner::Stats& result) { callback->onStats(result); });
+    return 0;
+  }
+
+  jint repl_enqueue_message(
+      facebook::jni::alias_ref<jstring> msg,
+      jint msgType,
+      facebook::jni::alias_ref<jstring> grammar,
+      facebook::jni::alias_ref<jstring> action) {
+    runner_->repl_enqueue_message(
+        msg->toStdString(),
+        static_cast<Runner::MsgType>(msgType),
+        grammar->toStdString(),
+        action->toStdString());
     return 0;
   }
 
@@ -148,6 +173,8 @@ class ExecuTorchLlamaJni
     registerHybrid({
         makeNativeMethod("initHybrid", ExecuTorchLlamaJni::initHybrid),
         makeNativeMethod("generate", ExecuTorchLlamaJni::generate),
+        makeNativeMethod("repl_start", ExecuTorchLlamaJni::repl_start),
+        makeNativeMethod("repl_enqueue_message", ExecuTorchLlamaJni::repl_enqueue_message),
         makeNativeMethod("stop", ExecuTorchLlamaJni::stop),
         makeNativeMethod("load", ExecuTorchLlamaJni::load),
     });
