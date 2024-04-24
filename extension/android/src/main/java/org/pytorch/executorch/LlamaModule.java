@@ -45,6 +45,12 @@ public class LlamaModule {
   @DoNotStrip
   public native int generate(String prompt, LlamaCallback llamaCallback);
 
+  @DoNotStrip
+  public native int repl_start(String prompt, String antiPrompt, LlamaCallback llamaCallback);
+
+  @DoNotStrip
+  public native int repl_enqueue_message(String msg, int msgType, String grammar, String action);
+
   /** Stop current generate() before it finishes. */
   @DoNotStrip
   public native void stop();
