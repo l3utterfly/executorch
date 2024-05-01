@@ -80,6 +80,10 @@ class TestBackends(unittest.TestCase):
             compile_options = {
                 "memory_layout_override": memory_layout,
             }
+
+            # At least model should run in eager mode.
+            model(*sample_inputs)
+
             program: ExportedProgram = export(
                 model, sample_inputs, dynamic_shapes=dynamic_shapes
             )
@@ -729,6 +733,192 @@ class TestBackends(unittest.TestCase):
 
         self.lower_module_and_test_output(
             FullModule(),
+            sample_inputs,
+            memory_layouts=[vk_graph_schema.VkMemoryLayout.TENSOR_CHANNELS_PACKED],
+        )
+
+    def test_vulkan_backend_reshape(self):
+        class ReshapeModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x):
+                return torch.reshape(x, [-1, x.size(-1)])
+
+        sample_inputs = (torch.randn(size=(5, 3, 4), dtype=torch.float32),)
+
+        self.lower_module_and_test_output(
+            ReshapeModule(),
+            sample_inputs,
+            memory_layouts=[vk_graph_schema.VkMemoryLayout.TENSOR_CHANNELS_PACKED],
+        )
+
+    def test_vulkan_backend_view(self):
+        class ViewModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x):
+                return x.view([-1, x.size(-1)])
+
+        sample_inputs = (torch.randn(size=(3, 2, 3, 4), dtype=torch.float32),)
+
+        self.lower_module_and_test_output(
+            ViewModule(),
+            sample_inputs,
+            memory_layouts=[vk_graph_schema.VkMemoryLayout.TENSOR_CHANNELS_PACKED],
+        )
+
+    def test_vulkan_backend_unsqueeze(self):
+        class UnsqueezeModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x):
+                x = torch.unsqueeze(x, 1)
+                x = torch.unsqueeze(x, 0)
+                return x
+
+        sample_inputs = (torch.randn(size=(3,), dtype=torch.float32),)
+
+        self.lower_module_and_test_output(
+            UnsqueezeModule(),
+            sample_inputs,
+            memory_layouts=[vk_graph_schema.VkMemoryLayout.TENSOR_CHANNELS_PACKED],
+        )
+
+    def test_vulkan_backend_select(self):
+        class SelectModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x):
+                return x[0][3]
+
+        sample_inputs = (torch.randn(size=(3, 6, 2, 7), dtype=torch.float32),)
+
+        self.lower_module_and_test_output(
+            SelectModule(),
+            sample_inputs,
+            memory_layouts=[vk_graph_schema.VkMemoryLayout.TENSOR_CHANNELS_PACKED],
+        )
+
+    def DISABLED_test_vulkan_backend_permute_copy(self):
+        # aten.permute_copy.default is not enabled yet in partitioner
+        class PermuteModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x):
+                return torch.permute(x, [3, 0, 2, 1])
+
+        sample_inputs = (torch.randn(size=(3, 6, 2, 7), dtype=torch.float32),)
+
+        self.lower_module_and_test_output(
+            PermuteModule(),
+            sample_inputs,
+            memory_layouts=[vk_graph_schema.VkMemoryLayout.TENSOR_CHANNELS_PACKED],
+        )
+
+    def test_vulkan_backend_cat(self):
+        class TestModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x, y, z, w):
+                return torch.cat([x, y, z, w], dim=1)
+
+        sample_inputs = (
+            torch.randn(size=(3, 6, 2, 7), dtype=torch.float32),
+            torch.randn(size=(3, 1, 2, 7), dtype=torch.float32),
+            torch.randn(size=(3, 9, 2, 7), dtype=torch.float32),
+            torch.randn(size=(3, 3, 2, 7), dtype=torch.float32),
+        )
+
+        self.lower_module_and_test_output(
+            TestModule(),
+            sample_inputs,
+            memory_layouts=[vk_graph_schema.VkMemoryLayout.TENSOR_CHANNELS_PACKED],
+        )
+
+    def test_vulkan_backend_slice(self):
+        class TestModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x):
+                return x[:, 2:9:2, :]
+
+        sample_inputs = (torch.randn(size=(3, 13, 7, 3), dtype=torch.float32),)
+
+        self.lower_module_and_test_output(
+            TestModule(),
+            sample_inputs,
+            memory_layouts=[vk_graph_schema.VkMemoryLayout.TENSOR_CHANNELS_PACKED],
+        )
+
+    def test_vulkan_backend_split_with_sizes(self):
+        class TestModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x):
+                return torch.split(x, (3, 6, 1, 3), dim=1)
+
+        sample_inputs = (torch.randn(size=(3, 13, 7, 3), dtype=torch.float32),)
+
+        self.lower_module_and_test_output(
+            TestModule(),
+            sample_inputs,
+            memory_layouts=[vk_graph_schema.VkMemoryLayout.TENSOR_CHANNELS_PACKED],
+        )
+
+    def test_vulkan_backend_split_tensor(self):
+        class TestModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x):
+                return torch.tensor_split(x, 2, dim=1)
+
+        sample_inputs = (torch.randn(size=(3, 14, 7, 3), dtype=torch.float32),)
+
+        self.lower_module_and_test_output(
+            TestModule(),
+            sample_inputs,
+            memory_layouts=[vk_graph_schema.VkMemoryLayout.TENSOR_CHANNELS_PACKED],
+        )
+
+    def test_vulkan_backend_clone(self):
+        class TestModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x):
+                return torch.clone(x)
+
+        sample_inputs = (torch.randn(size=(3, 14, 7, 3), dtype=torch.float32),)
+
+        self.lower_module_and_test_output(
+            TestModule(),
+            sample_inputs,
+            memory_layouts=[vk_graph_schema.VkMemoryLayout.TENSOR_CHANNELS_PACKED],
+        )
+
+    def DISABLED_test_vulkan_backend_t_default(self):
+        # aten.permute_copy.default is not enabled yet in partitioner
+        class TestModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x):
+                # torch.t is actually exported as aten::permute.
+                return torch.t(x)
+
+        sample_inputs = (torch.randn(size=(3, 14), dtype=torch.float32),)
+
+        self.lower_module_and_test_output(
+            TestModule(),
             sample_inputs,
             memory_layouts=[vk_graph_schema.VkMemoryLayout.TENSOR_CHANNELS_PACKED],
         )
