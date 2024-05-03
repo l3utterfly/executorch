@@ -140,9 +140,53 @@ class ExecuTorchLlamaJni
       facebook::jni::alias_ref<jstring> prompt,
       facebook::jni::alias_ref<jstring> antiPrompt,
       facebook::jni::alias_ref<ExecuTorchLlamaCallbackJni> callback) {
+    // buffer to handle utf8 string conversion byte-by-byte
+    std::string buffer;
+
     runner_->start_repl(
         prompt->toStdString(),
         antiPrompt->toStdString(),
+        [buffer, &callback](std::string result) mutable {
+          // Append the received bytes to the buffer.
+          buffer.append(result);
+
+          std::string response = "";
+
+          while (!buffer.empty()) {
+            size_t length;
+            if ((buffer[0] & 0x80) == 0) {
+              // Single-byte character (ASCII).
+              length = 1;
+            } else if ((buffer[0] & 0xE0) == 0xC0) {
+              // Two-byte character.
+              length = 2;
+            } else if ((buffer[0] & 0xF0) == 0xE0) {
+              // Three-byte character.
+              length = 3;
+            } else if ((buffer[0] & 0xF8) == 0xF0) {
+              // Four-byte character.
+              length = 4;
+            } else {
+              // Invalid byte, remove it from the buffer.
+              buffer.erase(0, 1);
+              continue;
+            }
+
+            if (buffer.size() < length) {
+              // Buffer does not yet contain a complete character.
+              break;
+            }
+
+            response += buffer.substr(0, length);
+
+            // Remove the processed character from the buffer.
+            buffer.erase(0, length);
+          }
+          
+          if(response.size() > 0) {
+            callback->onResult("REPL_MSG:" + response);
+          }
+        },
         [callback](std::string result) { callback->onResult(result); },
         [callback](const Runner::Stats& result) { callback->onStats(result); });
     return 0;
@@ -174,7 +218,8 @@ class ExecuTorchLlamaJni
         makeNativeMethod("initHybrid", ExecuTorchLlamaJni::initHybrid),
         makeNativeMethod("generate", ExecuTorchLlamaJni::generate),
         makeNativeMethod("repl_start", ExecuTorchLlamaJni::repl_start),
-        makeNativeMethod("repl_enqueue_message", ExecuTorchLlamaJni::repl_enqueue_message),
+        makeNativeMethod(
+            "repl_enqueue_message", ExecuTorchLlamaJni::repl_enqueue_message),
         makeNativeMethod("stop", ExecuTorchLlamaJni::stop),
         makeNativeMethod("load", ExecuTorchLlamaJni::load),
     });

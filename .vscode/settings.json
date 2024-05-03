@@ -87,6 +87,7 @@
         "valarray": "cpp",
         "variant": "cpp",
         "multi_span": "cpp",
-        "string_span": "cpp"
+        "string_span": "cpp",
+        "alignedvector3": "cpp"
     }
 }

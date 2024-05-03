@@ -81,6 +81,7 @@ class Runner {
       const std::string& prompt,
       const std::string& antiPrompt,
       std::function<void(const std::string&)> token_callback,
+      std::function<void(const std::string&)> system_msg_callback,
       std::function<void(const Stats&)> stats_callback);
 
   void repl_enqueue_message(

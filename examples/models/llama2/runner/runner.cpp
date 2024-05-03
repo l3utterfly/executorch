@@ -238,6 +238,7 @@ Error Runner::start_repl(
     const std::string& prompt,
     const std::string& antiPrompt,
     std::function<void(const std::string&)> token_callback,
+    std::function<void(const std::string&)> system_msg_callback,
     std::function<void(const Stats&)> stats_callback) {
   // Prepare the inputs.
   // Use ones-initialized inputs.
@@ -270,25 +271,23 @@ Error Runner::start_repl(
   std::vector<uint64_t> prompt_tokens = encode_res.get();
   int num_prompt_tokens = prompt_tokens.size();
 
-  if (token_callback) {
-    token_callback("REPL_LOG:seq_len=" + std::to_string(seq_len) + "\n");
-    token_callback(
-        "REPL_LOG:max_seq_len_=" + std::to_string(max_seq_len_) + "\n");
-    token_callback(
-        "REPL_LOG:num_prompt_tokens=" + std::to_string(num_prompt_tokens) +
-        "\n");
-  }
+  system_msg_callback("REPL_LOG:seq_len=" + std::to_string(seq_len) + "\n");
+  system_msg_callback(
+      "REPL_LOG:max_seq_len_=" + std::to_string(max_seq_len_) + "\n");
+  system_msg_callback(
+      "REPL_LOG:num_prompt_tokens=" + std::to_string(num_prompt_tokens) +
+      "\n");
 
   if (num_prompt_tokens < 1) {
-    token_callback("REPL_ERROR:Expected at least 1 prompt token");
+    system_msg_callback("REPL_ERROR:Expected at least 1 prompt token");
     return Error::Ok;
   }
   if (num_prompt_tokens > max_seq_len_) {
-    token_callback("REPL_ERROR:Max context length exceeded for this model");
+    system_msg_callback("REPL_ERROR:Max context length exceeded for this model");
     return Error::Ok;
   }
   if (num_prompt_tokens > seq_len) {
-    token_callback(
+    system_msg_callback(
         "REPL_ERROR:Prompt too long, increase the context length in your settings.");
     return Error::Ok;
   }
@@ -362,8 +361,8 @@ Error Runner::start_repl(
   std::string input_suffix =
       "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
 
-  if (token_callback) {
-    token_callback("REPL_LOG:starting repl...\n");
+  if (system_msg_callback) {
+    system_msg_callback("REPL_LOG:starting repl...\n");
   }
   std::string last_output = "";
   bool processingInitialPrompt = true;
@@ -412,7 +411,7 @@ Error Runner::start_repl(
       // prefill, force the next token to be the next prompt token
       cur_token = prompt_tokens[pos + 1];
 
-      token_callback(
+      system_msg_callback(
           "REPL_PROGRESS:" +
           std::to_string((float)pos / (float)num_prompt_tokens));
     } else {
@@ -432,7 +431,7 @@ Error Runner::start_repl(
         last_output += piece_res.get();
 
         if (token_callback) {
-          token_callback("REPL_MSG:" + piece_res.get());
+          token_callback(piece_res.get());
         }
 
         // check for anti prompt
@@ -460,7 +459,7 @@ Error Runner::start_repl(
     pos++;
 
     if (wait_for_input) {
-      token_callback("REPL_READY:");
+      system_msg_callback("REPL_READY:");
 
       ReplMsg replMsg;
       messageQueue.wait_dequeue(replMsg);
