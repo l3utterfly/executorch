@@ -117,6 +117,33 @@ You can export and run the original Llama3 8B model.
 
     Due to the larger vocabulary size of Llama3, we recommend quantizing the embeddings with `--embedding-quantize 4,32` to further reduce the model size.
 
+### Option D: Download models from Hugging Face and convert from safetensor format to state dict
+
+You can also download above models from [Hugging Face](https://huggingface.co/). Since ExecuTorch starts from a PyTorch model, a script like below can be used to convert the Hugging Face safetensors format to PyTorch's state dict. It leverages the utils provided by [TorchTune](https://github.com/pytorch/torchtune).
+
+```Python
+from torchtune.utils import FullModelHFCheckpointer
+from torchtune.models import convert_weights
+import torch
+
+# Convert from safetensors to TorchTune. Suppose the model has been downloaded from Hugging Face
+checkpointer = FullModelHFCheckpointer(
+    checkpoint_dir='/home/.cache/huggingface/hub/models/snapshots/hash-number',
+    checkpoint_files=['model-00001-of-00002.safetensors', 'model-00002-of-00002.safetensors'],
+    output_dir='/the/destination/dir' ,
+    model_type='LLAMA3' # or other types that TorchTune supports
+)
+
+print("loading checkpoint")
+sd = checkpointer.load_checkpoint()
+
+# Convert from TorchTune to Meta (PyTorch native)
+sd = convert_weights.tune_to_meta(sd['model'])
+
+print("saving checkpoint")
+torch.save(sd, "/the/destination/dir/checkpoint.pth")
+```
+
 ## (Optional) Finetuning
 
 If you want to finetune your model based on a specific dataset, PyTorch provides [TorchTune](https://github.com/pytorch/torchtune) - a native-Pytorch library for easily authoring, fine-tuning and experimenting with LLMs.
@@ -161,9 +188,9 @@ The Wikitext results generated above used: `{max_seq_len: 2048, limit: 1000}`
         -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
         -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
         -DEXECUTORCH_BUILD_XNNPACK=ON \
-        -DEXECUTORCH_BUILD_QUANTIZED=ON \
-        -DEXECUTORCH_BUILD_OPTIMIZED=ON \
-        -DEXECUTORCH_BUILD_CUSTOM=ON \
+        -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=ON \
+        -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
+        -DEXECUTORCH_BUILD_KERNELS_CUSTOM=ON \
         -Bcmake-out .
 
     cmake --build cmake-out -j16 --target install --config Release
@@ -174,10 +201,10 @@ The Wikitext results generated above used: `{max_seq_len: 2048, limit: 1000}`
     cmake -DPYTHON_EXECUTABLE=python \
         -DCMAKE_INSTALL_PREFIX=cmake-out \
         -DCMAKE_BUILD_TYPE=Release \
-        -DEXECUTORCH_BUILD_CUSTOM=ON \
-        -DEXECUTORCH_BUILD_OPTIMIZED=ON \
+        -DEXECUTORCH_BUILD_KERNELS_CUSTOM=ON \
+        -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
         -DEXECUTORCH_BUILD_XNNPACK=ON \
-        -DEXECUTORCH_BUILD_QUANTIZED=ON \
+        -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=ON \
         -Bcmake-out/examples/models/llama2 \
         examples/models/llama2
 
@@ -215,7 +242,7 @@ cmake -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
     -DEXECUTORCH_ENABLE_LOGGING=1 \
     -DEXECUTORCH_BUILD_XNNPACK=ON \
     -DPYTHON_EXECUTABLE=python \
-    -DEXECUTORCH_BUILD_OPTIMIZED=ON \
+    -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
     -Bcmake-out-android .
 
 cmake --build cmake-out-android -j16 --target install --config Release
@@ -229,7 +256,7 @@ cmake  -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
     -DCMAKE_INSTALL_PREFIX=cmake-out-android \
     -DCMAKE_BUILD_TYPE=Release \
     -DPYTHON_EXECUTABLE=python \
-    -DEXECUTORCH_BUILD_OPTIMIZED=ON \
+    -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
     -Bcmake-out-android/examples/models/llama2 \
     examples/models/llama2
 

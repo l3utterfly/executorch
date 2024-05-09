@@ -18,10 +18,6 @@ endif()
 if(NOT EXECUTORCH_ROOT)
   set(EXECUTORCH_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 endif()
-# Source root directory for pytorch.
-if(NOT TORCH_ROOT)
-  set(TORCH_ROOT ${EXECUTORCH_ROOT}/third-party/pytorch)
-endif()
 
 include(${EXECUTORCH_ROOT}/build/Utils.cmake)
 include(${EXECUTORCH_ROOT}/build/Codegen.cmake)
@@ -35,8 +31,8 @@ set(_common_compile_options -Wno-deprecated-declarations -fPIC)
 # Let files say "include <executorch/path/to/header.h>".
 set(_common_include_directories ${EXECUTORCH_ROOT}/..)
 
-# Find prebuilt libraries. executorch package should contain
-# portable_ops_lib, etdump, bundled_program.
+# Find prebuilt libraries. executorch package should contain portable_ops_lib,
+# etdump, bundled_program.
 find_package(executorch CONFIG REQUIRED)
 target_link_options_shared_lib(executorch)
 target_link_options_shared_lib(portable_ops_lib)
@@ -47,15 +43,12 @@ find_package(
   gflags REQUIRED PATHS ${CMAKE_CURRENT_BINARY_DIR}/../../third-party
 )
 
-add_executable(sdk_example_runner
-               sdk_example_runner/sdk_example_runner.cpp)
+add_executable(sdk_example_runner sdk_example_runner/sdk_example_runner.cpp)
 target_compile_options(executorch INTERFACE -DET_EVENT_TRACER_ENABLED)
 
 target_include_directories(
-  etdump
-  INTERFACE
-  ${CMAKE_CURRENT_BINARY_DIR}/../../sdk/include
-  ${EXECUTORCH_ROOT}/third-party/flatcc/include
+  etdump INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/../../sdk/include
+                   ${EXECUTORCH_ROOT}/third-party/flatcc/include
 )
 target_link_libraries(
   sdk_example_runner
