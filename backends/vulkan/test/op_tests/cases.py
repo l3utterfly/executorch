@@ -94,6 +94,26 @@ def get_addmm_inputs():
     return test_suite
 
 
+def get_linear_inputs():
+    MKN_list = [
+        (S2, M2, M1),
+        (L, L, M1),
+    ]
+
+    inputs_list = [((M, K), (N, K), None) for M, K, N in MKN_list]
+    inputs_list += [((M, K), (N, K), (N)) for M, K, N in MKN_list]
+    inputs_list += [((3, M, K), (N, K), None) for M, K, N in MKN_list]
+    inputs_list += [((3, M, K), (N, K), (N)) for M, K, N in MKN_list]
+
+    test_suite = VkTestSuite(inputs_list)
+    test_suite.dtypes = ["at::kFloat"]
+    test_suite.layouts = [
+        "api::kWidthPacked",
+        "api::kChannelsPacked",
+    ]
+    return test_suite
+
+
 def get_pool2d_inputs():
     test_suite = VkTestSuite(
         [
@@ -470,6 +490,7 @@ def get_cat_inputs():
     test_suite = VkTestSuite(
         [
             # Cat on Height
+            ([(S1, S1, 3, 5), (S1, S1, 0, 5)], 2),
             ([(S1, S1, 3, 5), (S1, S1, 4, 5)], 2),
             ([(S1, 3, 5), (S1, 4, 5)], 1),
             ([(3, 5), (4, 5)], 0),
@@ -481,6 +502,7 @@ def get_cat_inputs():
             # Cat on Width
             ([(S1, S1, 5, 3), (S1, S1, 5, 4)], 3),
             ([(S1, 5, 3), (S1, 5, 4)], 2),
+            ([(5, 0), (5, 4)], 1),
             ([(5, 3), (5, 4)], 1),
             ([(5, 3), (5, 4), (5, 1)], 1),
             (
@@ -501,6 +523,7 @@ def get_cat_inputs():
                 0,
             ),
             # Cat on Channel
+            ([(S, 5, 4), (0, 5, 4), (S2, 5, 4)], 0),
             ([(S, 5, 4), (S1, 5, 4), (S2, 5, 4)], 0),
             ([(XS, 5, 4), (XS, 5, 4), (S2, 5, 4)], 0),
             ([(XS, S, 5, 4), (XS, S1, 5, 4), (XS, S2, 5, 4)], 1),
@@ -648,6 +671,95 @@ def get_unary_ops_inputs():
             (S1, S2, S2, M2),
         ]
     )
+    test_suite.storage_types = ["api::kTexture3D", "api::kBuffer"]
+    return test_suite
+
+
+def get_native_batch_norm_inputs():
+    Test = namedtuple(
+        "VkSliceTest", ["self", "weight", "bias", "mean", "var", "momentum", "eps"]
+    )
+
+    test_cases = [
+        Test(
+            self=(1, 1, 2, 5),
+            weight=(1,),
+            bias=(1,),
+            mean=(1,),
+            var=(1,),
+            momentum=0.0,
+            eps=0.001,
+        ),
+        Test(
+            self=(S2, 1, 2, 5),
+            weight=(1,),
+            bias=(1,),
+            mean=(1,),
+            var=(1,),
+            momentum=0.0,
+            eps=0.001,
+        ),
+        Test(
+            self=(1, S2, 2, 5),
+            weight=(S2,),
+            bias=(S2,),
+            mean=(S2,),
+            var=(S2,),
+            momentum=0.0,
+            eps=0.001,
+        ),
+        Test(
+            self=(9, S1, 2, 5),
+            weight=(S1,),
+            bias=(S1,),
+            mean=(S1,),
+            var=(S1,),
+            momentum=0.0,
+            eps=0.01,
+        ),
+        Test(
+            self=(3, S1, 2, 5),
+            weight=(S1,),
+            bias=(S1,),
+            mean=(S1,),
+            var=(S1,),
+            momentum=0.0,
+            eps=0.001,
+        ),
+        Test(
+            self=(3, S2, 2, 5),
+            weight=(S2,),
+            bias=(S2,),
+            mean=(S2,),
+            var=(S2,),
+            momentum=0.0,
+            eps=0.001,
+        ),
+        Test(
+            self=(3, S2, 2, 5),
+            weight=(S2,),
+            bias=(S2,),
+            mean=(S2,),
+            var=(S2,),
+            momentum=0.0,
+            eps=0.000,
+        ),
+    ]
+
+    test_suite = VkTestSuite(test_cases)
+
+    return test_suite
+
+
+def get_gelu_inputs():
+    test_suite = VkTestSuite(
+        [
+            ((M1), "tanh"),
+            ((M1, M2), "tanh"),
+            ((S1, M1, M2), "tanh"),
+            ((S1, S2, S2, M2), "tanh"),
+        ]
+    )
     return test_suite
 
 
@@ -659,6 +771,7 @@ test_suites = {
     "aten.addmm.default": get_addmm_inputs(),
     "aten.bmm.default": get_bmm_inputs(),
     "aten.mm.default": get_mm_inputs(),
+    "aten.linear.default": get_linear_inputs(),
     "aten.max_pool2d_with_indices.default": get_pool2d_inputs(),
     "aten.convolution.default": get_conv_inputs(),
     "aten.native_layer_norm.default": get_native_layer_norm_inputs(),
@@ -669,6 +782,7 @@ test_suites = {
     "aten.permute_copy.default": get_permute_inputs(),
     "aten.view_copy.default": get_view_inputs(),
     "aten.slice_copy.Tensor": get_slice_inputs(),
+    "aten.slice.Tensor": get_slice_inputs(),
     "aten.unsqueeze_copy.default": get_unsqueeze_inputs(),
     "aten.clone.default": get_clone_inputs(),
     "aten.repeat.default": get_repeat_inputs(),
@@ -676,6 +790,10 @@ test_suites = {
     "aten.split_with_sizes_copy.default": get_split_with_sizes_inputs(),
     "aten.split.Tensor": get_split_tensor_inputs(),
     "aten.sqrt.default": get_unary_ops_inputs(),
+    "aten.exp.default": get_unary_ops_inputs(),
     "aten._softmax.default": get_softmax_inputs(),
     "aten._log_softmax.default": get_softmax_inputs(),
+    "aten._native_batch_norm_legit_no_training.default": get_native_batch_norm_inputs(),
+    "aten.gelu.default": get_gelu_inputs(),
+    "aten.hardshrink.default": get_unary_ops_inputs(),
 }

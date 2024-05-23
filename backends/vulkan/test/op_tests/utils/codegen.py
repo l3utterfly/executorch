@@ -24,6 +24,7 @@ from executorch.backends.vulkan.test.op_tests.utils.codegen_base import (
     OPT_LAYOUT,
     OPT_MEMORY_FORMAT,
     OPT_SCALAR_TYPE,
+    STRING,
     TENSOR_VECTOR,
     TestSuite,
     TestSuiteGen,
@@ -130,7 +131,14 @@ class ComputeGraphGen:
                 ATenArg(name=arg.name, cpp_type=cpp_type, default=arg.default)
             )
 
-            requires_prepack = "weight" in arg.name or "bias" in arg.name
+            # These are the argument will be passed as a "weight" tensor, the
+            # corresponding object will be TensorRef in the compute graph.
+            requires_prepack = (
+                "weight" in arg.name
+                or "bias" in arg.name
+                or "running_mean" in arg.name
+                or "running_var" in arg.name
+            )
             supports_prepack = False
             if arg.name in self.suite_def.prepacked_args:
                 supports_prepack = True
@@ -344,6 +352,8 @@ ValueRef out_ref = {self.graph}{self.dot}add_value_list(std::move({ref.value_lis
             or ref.src_cpp_type == OPT_MEMORY_FORMAT
         ):
             ret_str += "add_none(); \n"
+        elif ref.src_cpp_type == STRING:
+            ret_str += f"add_string(std::string({ref.src_cpp_name})); \n"
         elif ref.src_cpp_type == TWO_TENSOR_TUPLE:
             ret_str += f"add_value_list({{{ref.name}_first, {ref.name}_second}}); \n"
         elif ref.src_cpp_type == THREE_TENSOR_TUPLE:
@@ -521,8 +531,11 @@ for (int i=0; i<out.size(); i++) {{
 
         return graph_build
 
-    def gen_graph_exec_code(self) -> str:
+    def gen_graph_exec_code(self, loop_range: int = 1) -> str:
         graph_exec = ""
+        if loop_range > 1:
+            graph_exec += f"for (int i = 0; i < {loop_range} ; ++i) "
+        graph_exec += "{\n"
         for aten_arg in self.args:
             ref = self.refs[aten_arg.name]
             if ref.is_in:
@@ -534,6 +547,8 @@ for (int i=0; i<out.size(); i++) {{
 
         graph_exec += self.declare_vk_out_for(self.refs["out"])
         graph_exec += self.copy_from_staging(self.refs["out"])
+        graph_exec += self.check_graph_out(self.refs["out"])
+        graph_exec += "}\n"
 
         return graph_exec
 
@@ -554,7 +569,6 @@ for (int i=0; i<out.size(); i++) {{
         op_check_fn_body += self.gen_conditional_skips()
         op_check_fn_body += self.gen_graph_build_code()
         op_check_fn_body += self.gen_graph_exec_code()
-        op_check_fn_body += self.check_graph_out(self.refs["out"])
 
         # Add two level of indent for readability
         op_check_fn_body = re.sub(r"^", "        ", op_check_fn_body, flags=re.M)

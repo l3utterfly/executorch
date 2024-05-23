@@ -1602,7 +1602,9 @@ class TestPasses(unittest.TestCase):
             def forward(self, x):
                 o1 = torch.ops.aten.view_copy.default(x, [1])
                 o2 = torch.ops.aten.view_copy.default(self.parameter, [1])
-                return o1, o2
+                # view_copys at the end of a function are not replaced, so add
+                # a computation before the end of the graph.
+                return torch.ops.aten.add.Tensor(o1, o2)
 
         ep = torch.export.export(
             TestViewCopies(),
@@ -1630,7 +1632,7 @@ class TestPasses(unittest.TestCase):
         assert gm_res is not None
         gm = gm_res.graph_module
 
-        # Check before transformation
+        # Check after transformation
         FileCheck().check_count(
             "torch.ops.aten.view_copy.default", 0, exactly=True
         ).run(gm.code)
