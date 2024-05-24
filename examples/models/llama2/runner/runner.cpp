@@ -21,6 +21,9 @@
 #include <ctime>
 #include <memory>
 #include <sstream>
+#include <map> // Include this header for std::map
+#include <algorithm> // For std::max
+#include <vector> // For std::vector
 
 #ifdef USE_ATEN_LIB
 #include <torch/torch.h>
