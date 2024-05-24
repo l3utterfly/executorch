@@ -32,6 +32,9 @@ from torch.ao.quantization.quantize_pt2e import convert_pt2e, prepare_pt2e
 from torch.ao.quantization.quantizer import Quantizer
 from torch.ao.quantization.quantizer.composable_quantizer import ComposableQuantizer
 from torch.nn.attention import SDPBackend
+from torch.export.exported_program import ExportGraphSignature
+from executorch.exir.pass_base import PassBase, PassResult
+from executorch.exir.memory_planning import _is_mutable_buffer
 
 from ...portable.utils import export_to_edge, save_pte_program
 from ..model_factory import EagerModelFactory
@@ -39,6 +42,17 @@ from ..model_factory import EagerModelFactory
 FORMAT = "[%(levelname)s %(asctime)s %(filename)s:%(lineno)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=FORMAT)
 
+class KVMemIdMemoryPlanningPass(MemoryPlanningPass):
+    def run(self, graph_module: torch.fx.GraphModule, graph_signature: Optional[ExportGraphSignature]) -> PassResult:
+        for subgm in graph_module.modules():
+            if not isinstance(subgm, torch.fx.GraphModule):
+                continue
+            for node in subgm.graph.nodes:
+                if _is_mutable_buffer(node, graph_signature):
+                    print(f"Mutable buffer found: {node}")
+                    node.meta["spec"].mem_id = 2
+
+        return super().run(graph_module, graph_signature)
 
 class WeightType(Enum):
     LLAMA = "LLAMA"
@@ -366,7 +380,7 @@ class LlamaEdgeManager:
                 passes=[
                     QuantFusionPass(),
                 ],
-                memory_planning_pass=MemoryPlanningPass(
+                memory_planning_pass=KVMemIdMemoryPlanningPass(
                     "greedy", alloc_graph_input=False
                 ),
                 sym_shape_eval_pass=ConstraintBasedSymShapeEvalPass(),

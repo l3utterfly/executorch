@@ -6,6 +6,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <iostream>  // Include the iostream header
+#include <functional>
+#include <string>
 #include <gflags/gflags.h>
 
 #include <executorch/examples/models/llama2/runner/runner.h>
@@ -26,7 +29,7 @@ DEFINE_string(prompt, "The answer to the ultimate question is", "Prompt.");
 
 DEFINE_double(
     temperature,
-    0.8f,
+    0.0f,
     "Temperature; Default is 0.8f. 0 = greedy argmax sampling (deterministic). Lower temperature = more deterministic");
 
 DEFINE_int32(
@@ -68,11 +71,48 @@ int32_t main(int32_t argc, char** argv) {
         num_performant_cores);
   }
 #endif
+  std::vector<std::string> user_prompts = {
+    "What's the capital of France?", "REGEN"
+  };
   // create llama runner
   ::torch::executor::Runner runner(model_path, tokenizer_path, temperature);
 
-  // generate
-  runner.generate(prompt, seq_len);
+  // Define callbacks
+  auto token_callback = [](const std::string& data) {
+    printf("Token callback data: %s\n", data.c_str());
+  };
+
+  auto system_msg_callback = [&runner, &user_prompts](const std::string& data) {
+    printf("System message callback data: %s\n", data.c_str());
+
+    if(data == "REPL_READY:") {
+      auto msg = user_prompts.front();
+
+      if(msg == "REGEN") {
+        // send a message
+        runner.repl_enqueue_message("The capital of France is London.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nThat doesn't sound right...", ::torch::executor::Runner::MsgType::USER, "", "REGEN");
+      } else {
+        // send a message
+        runner.repl_enqueue_message(msg, ::torch::executor::Runner::MsgType::USER, "", "");
+      }
+
+      // Remove the first element
+      user_prompts.erase(user_prompts.begin());
+    }
+  };
+
+  auto stats_callback = [](const ::torch::executor::Runner::Stats& stats) {
+    printf("Stats callback data: %ld\n", stats.model_load_start_ms);
+  };
+
+  std::string my_prompt = "<|start_header_id|>system<|end_header_id|>\n\nYou are Layla, a beautiful AI assistant who's favourite animal is the butterfly.<|eot_id|>";
+  std::string antiPrompt = "<|eot_id|>";
+
+  // start repl in a separate thread
+  std::thread repl_thread(&::torch::executor::Runner::start_repl, &runner, my_prompt, antiPrompt, 8192, token_callback, system_msg_callback, stats_callback);
+
+  // Wait for the REPL thread to finish
+  repl_thread.join();
 
   return 0;
 }

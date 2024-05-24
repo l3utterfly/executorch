@@ -180,6 +180,22 @@ class Module final {
   }
 
   /**
+   * Obtain the KV Cache buffer
+  */
+  __ET_NODISCARD
+  std::vector<uint8_t>& get_kv_cache_buffer() {
+    return methods_.at("forward").planned_buffers[kv_cache_buffer_index_];
+  }
+
+  /**
+   * Update the KV Cache buffer
+  */
+  __ET_NODISCARD
+  void update_kv_cache_buffer(std::vector<uint8_t>& buffer) {
+    methods_.at("forward").planned_buffers[kv_cache_buffer_index_] = buffer;
+  }
+
+  /**
    * Retrieves the EventTracer instance being used by the Module.
    * EventTracer is used for tracking and logging events during the execution
    * of methods.
@@ -208,6 +224,8 @@ class Module final {
   std::unique_ptr<EventTracer> event_tracer_;
   std::unique_ptr<Program> program_;
   std::unordered_map<std::string, MethodHolder> methods_;
+
+  int kv_cache_buffer_index_{0};
 };
 
 } // namespace torch::executor

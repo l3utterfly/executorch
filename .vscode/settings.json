@@ -88,6 +88,8 @@
         "variant": "cpp",
         "multi_span": "cpp",
         "string_span": "cpp",
-        "alignedvector3": "cpp"
+        "alignedvector3": "cpp",
+        "*.inc": "cpp",
+        "span_ext": "cpp"
     }
 }

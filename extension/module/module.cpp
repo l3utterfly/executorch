@@ -107,9 +107,15 @@ Error Module::load_method(const std::string& method_name) {
     method_holder.planned_buffers.reserve(planned_buffersCount);
     method_holder.planned_spans.reserve(planned_buffersCount);
 
+    ET_LOG(Info, "method name: %s", method_name.c_str());
+    ET_LOG(Info, "planned_buffersCount: %d", planned_buffersCount);
+
     for (auto index = 0; index < planned_buffersCount; ++index) {
       const auto buffer_size =
           method_metadata.memory_planned_buffer_size(index).get();
+
+      ET_LOG(Info, "buffer_size: %zu", buffer_size);
+
       method_holder.planned_buffers.emplace_back(buffer_size);
       method_holder.planned_spans.emplace_back(
           method_holder.planned_buffers.back().data(), buffer_size);

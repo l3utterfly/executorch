@@ -1,0 +1,19 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Llama Main (LLDB)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/cmake-out/examples/models/llama2/llama_main",
+            "args": [
+                "--model-path", "/home/layla/src/executorch/Llama-3-Lumimaid-8B-v0.1-OAS_kv_sdpa_xnn_qe_4_32_ctx8192.pte",
+                "--tokenizer-path", "/home/layla/src/text-generation-webui/models/Meta-Llama-3-8B/original/tokenizer.model"
+            ],
+            "cwd": "${workspaceFolder}",
+        }
+    ]
+}

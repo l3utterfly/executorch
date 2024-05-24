@@ -80,6 +80,8 @@ class Runner {
   Error start_repl(
       const std::string& prompt,
       const std::string& antiPrompt,
+      const int contextLength,
+      
       std::function<void(const std::string&)> token_callback,
       std::function<void(const std::string&)> system_msg_callback,
       std::function<void(const Stats&)> stats_callback);

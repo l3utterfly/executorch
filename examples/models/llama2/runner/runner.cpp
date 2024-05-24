@@ -235,8 +235,12 @@ void Runner::repl_enqueue_message(
 }
 
 Error Runner::start_repl(
+    // model settings
     const std::string& prompt,
     const std::string& antiPrompt,
+    const int contextLength,
+
+    // callbacks
     std::function<void(const std::string&)> token_callback,
     std::function<void(const std::string&)> system_msg_callback,
     std::function<void(const Stats&)> stats_callback) {
@@ -250,12 +254,10 @@ Error Runner::start_repl(
   }
 
   // this is the context length
-  int seq_len = 2048;
+  int seq_len = contextLength;
 
   // First token time only measures the time it takes to encode the prompt and
   // return a response token.
-
-  stats_.inference_start_ms = util::time_in_ms();
   shouldStop_ = false;
 
   // Set the sequence length to the max seq length if not provided
@@ -269,24 +271,24 @@ Error Runner::start_repl(
 
   // encode the (string) prompt into tokens sequence
   std::vector<uint64_t> prompt_tokens = encode_res.get();
-  int num_prompt_tokens = prompt_tokens.size();
+  int initial_prompt_tokens = prompt_tokens.size();
 
   system_msg_callback("REPL_LOG:seq_len=" + std::to_string(seq_len) + "\n");
   system_msg_callback(
       "REPL_LOG:max_seq_len_=" + std::to_string(max_seq_len_) + "\n");
   system_msg_callback(
-      "REPL_LOG:num_prompt_tokens=" + std::to_string(num_prompt_tokens) +
+      "REPL_LOG:initial_prompt_tokens=" + std::to_string(initial_prompt_tokens) +
       "\n");
 
-  if (num_prompt_tokens < 1) {
+  if (initial_prompt_tokens < 1) {
     system_msg_callback("REPL_ERROR:Expected at least 1 prompt token");
     return Error::Ok;
   }
-  if (num_prompt_tokens > max_seq_len_) {
+  if (initial_prompt_tokens > max_seq_len_) {
     system_msg_callback("REPL_ERROR:Max context length exceeded for this model");
     return Error::Ok;
   }
-  if (num_prompt_tokens > seq_len) {
+  if (initial_prompt_tokens > seq_len) {
     system_msg_callback(
         "REPL_ERROR:Prompt too long, increase the context length in your settings.");
     return Error::Ok;
@@ -332,21 +334,21 @@ Error Runner::start_repl(
 
   // If we arent using the kv cache then we can batch prefill the prompt
   if (!use_kv_cache_) {
-    tokens_managed.resize({1, num_prompt_tokens});
-    for (int i = 0; i < num_prompt_tokens - 1; i++) {
+    tokens_managed.resize({1, initial_prompt_tokens});
+    for (int i = 0; i < initial_prompt_tokens - 1; i++) {
       tokens_managed.get_aliasing_tensor().mutable_data_ptr<int64_t>()[i] =
           prompt_tokens[i];
     }
     // prefill tokens up to the last prompt token and then enter the loop with
     // the last promp token as the current token.
-    cur_token = prompt_tokens[num_prompt_tokens - 1];
-    pos = num_prompt_tokens - 1;
+    cur_token = prompt_tokens[initial_prompt_tokens - 1];
+    pos = initial_prompt_tokens - 1;
 
     // Print the prompt for consistent output between single token prefill and
     // batch prefill.
     uint64_t prev = prompt_tokens[0];
     uint64_t cur;
-    for (int i = 1; i < num_prompt_tokens; i++) {
+    for (int i = 1; i < initial_prompt_tokens; i++) {
       cur = prompt_tokens[i];
       auto piece_res = tokenizer_->decode(prev, cur);
       ET_CHECK_OK_OR_RETURN_ERROR(piece_res.error());
@@ -367,6 +369,9 @@ Error Runner::start_repl(
   std::string last_output = "";
   bool processingInitialPrompt = true;
 
+  // map of kv cache buffers (key = pos in sequence, value = kv cache buffer at), this is ordered by key by default
+  std::map<int, std::vector<uint8_t>> kv_cache_buffers;
+
   // Generate our tokens
   bool done = false;
   while (!done) {
@@ -374,9 +379,9 @@ Error Runner::start_repl(
     Result<torch::executor::Tensor> logits_res =
         run_model_step(cur_token, tokens_managed, start_pos_managed, seq_len);
 
-    if (pos == num_prompt_tokens) {
+    if (pos == initial_prompt_tokens) {
       stats_.first_token_ms = util::time_in_ms();
-    } else if (pos == num_prompt_tokens - 1) {
+    } else if (pos == initial_prompt_tokens - 1) {
       stats_.prompt_eval_end_ms = util::time_in_ms();
     }
 
@@ -407,23 +412,22 @@ Error Runner::start_repl(
     bool wait_for_input = false;
 
     // advance the state machine
-    if (pos < num_prompt_tokens - 1) {
-      // prefill, force the next token to be the next prompt token
+    if (pos < prompt_tokens.size() - 1) {
+      // prefill, force the next token to be the next prompt token (overriding our inference above)
       cur_token = prompt_tokens[pos + 1];
 
       system_msg_callback(
           "REPL_PROGRESS:" +
-          std::to_string((float)pos / (float)num_prompt_tokens));
+          std::to_string((float)pos / (float)prompt_tokens.size()));
     } else {
+      // append cur_token to the prompt_tokens
+      prompt_tokens.push_back(cur_token);
+
       // the first hit to this branch means we've finished the initial prompt
       if (processingInitialPrompt) {
         processingInitialPrompt = false;
         wait_for_input = true;
       } else {
-        // append cur_token to the prompt_tokens
-        prompt_tokens.push_back(cur_token);
-        num_prompt_tokens++;
-
         // print the token as string, decode it with the Tokenizer object
         auto piece_res = tokenizer_->decode(prev_token, cur_token);
         ET_CHECK(piece_res.ok());
@@ -458,7 +462,21 @@ Error Runner::start_repl(
     }
     pos++;
 
+    // we save the kv cache buffer every 16 tokens
+    if (pos % 16 == 0) {
+      kv_cache_buffers[pos] = std::vector<uint8_t>(
+          module_->get_kv_cache_buffer().begin(),
+          module_->get_kv_cache_buffer().end());
+    }
+
     if (wait_for_input) {
+      stats_.num_prompt_tokens = prompt_tokens.size();
+      stats_.num_generated_tokens = pos - prompt_tokens.size();
+      printReport(stats_);
+      if (stats_callback) {
+        stats_callback(stats_);
+      }
+
       system_msg_callback("REPL_READY:");
 
       ReplMsg replMsg;
@@ -470,13 +488,64 @@ Error Runner::start_repl(
       if (message == "###KILL###")
         done = true;
 
+      if (replMsg.action == "REGEN") {
+        // tokenize the input suffix
+        std::vector<uint64_t> input_suffix_tokens =
+            tokenizer_->encode(input_suffix, 0, 0).get();
+
+        // find the last input suffix in the prompt_tokens
+        auto it = std::find_end(prompt_tokens.begin(), prompt_tokens.end(), input_suffix_tokens.begin(), input_suffix_tokens.end());
+
+        // if we found it
+        if (it != prompt_tokens.end())
+        {
+          // move the iterator to the end of the input suffix
+          it += input_suffix_tokens.size();
+
+          // get the position of the last input suffix in the prompt tokens
+          pos = std::distance(prompt_tokens.begin(), it);
+
+          system_msg_callback("REPL_LOG:rolling back to the last input suffix at position " + std::to_string(pos) + "\n");
+
+          // we need to remove all the tokens after the input suffix (not including the input suffix)
+          prompt_tokens.erase(it, prompt_tokens.end());
+
+          int max_kv_pos = 0;
+
+          // loop through each key in the kv cache buffers map
+          for (auto it = kv_cache_buffers.begin(); it != kv_cache_buffers.end(); ) {
+            if (it->first > pos) {
+              it = kv_cache_buffers.erase(it); // Erase and move the iterator to the next element
+            } else {
+              max_kv_pos = std::max(max_kv_pos, it->first);
+              ++it; // Move to the next element
+            }
+          }
+
+          // set the pos to the highest kv cache buffer position
+          pos = max_kv_pos;
+
+          // update the kv cache buffer
+          module_->update_kv_cache_buffer(kv_cache_buffers[pos]);
+
+          // rollback start pos
+          auto start_pos = start_pos_managed.get_aliasing_tensor();
+          start_pos.mutable_data_ptr<int64_t>()[0] = pos;
+        }
+      }
+
       // Add tokens to embd only if the input buffer is non-empty
       if (message.length() > 0) {
+        stats_.inference_start_ms = util::time_in_ms();
+
         // prepend input prefix if any
-        // if we are regenerating with message, this means we are appending
-        // the edited system/assistant message, so we don't add an input
-        // prefix
-        message = input_prefix + message + input_suffix;
+        // if we are regenerating with message, this means we are appending the edited system/assistant message, so we don't add an input prefix
+        if (replMsg.action != "REGEN" && !input_prefix.empty())
+          message = input_prefix + message;
+
+        // append input suffix if any
+        if (!input_suffix.empty())
+          message += input_suffix;
 
         // tokenize message without any bos or eos
         Result<std::vector<uint64_t>> encode_res =
@@ -489,9 +558,6 @@ Error Runner::start_repl(
         std::vector<uint64_t> new_tokens = encode_res.get();
         prompt_tokens.insert(
             prompt_tokens.end(), new_tokens.begin(), new_tokens.end());
-
-        // increase prompt token num
-        num_prompt_tokens += new_tokens.size();
       }
     }
 
@@ -504,13 +570,6 @@ Error Runner::start_repl(
 
   if (pos == seq_len) {
     ET_LOG(Info, "Sequence length (%i tokens) reached!", seq_len);
-  }
-
-  stats_.num_prompt_tokens = num_prompt_tokens;
-  stats_.num_generated_tokens = pos - num_prompt_tokens;
-  printReport(stats_);
-  if (stats_callback) {
-    stats_callback(stats_);
   }
 
   return Error::Ok;
@@ -548,6 +607,10 @@ Error Runner::generate(
   // encode the (string) prompt into tokens sequence
   std::vector<uint64_t> prompt_tokens = encode_res.get();
   int num_prompt_tokens = prompt_tokens.size();
+
+  std::vector<uint64_t> embd;
+  embd.reserve(seq_len);
+  embd.resize(seq_len);
 
   ET_CHECK_MSG(num_prompt_tokens >= 1, "Expected at least 1 prompt token");
   ET_CHECK_MSG(
@@ -622,8 +685,24 @@ Error Runner::generate(
     }
   }
 
+  std::vector<std::vector<uint8_t>> kv_cache_buffers;
+  kv_cache_buffers.reserve(seq_len);
+  kv_cache_buffers.resize(seq_len);
+
   // Generate our tokens
   while (pos < seq_len - 1) {
+    // push cur token to embd (embd[pos] = cur_token)
+    embd[pos] = cur_token;
+
+    // copy the contents of kv cache at each step
+    auto kv_cache_buffer = module_->get_kv_cache_buffer();
+    kv_cache_buffers[pos].assign(kv_cache_buffer.begin(), kv_cache_buffer.end()) ;
+
+    // print the kv_cache
+    // for (int i = 0; i < 204288; i++) {
+    //   printf("kv_cache[%d] = %lu\n", i, kv_cache_buffer[i]);
+    // }
+
     // Run the model
     Result<torch::executor::Tensor> logits_res =
         run_model_step(cur_token, tokens_managed, start_pos_managed, seq_len);
@@ -674,12 +753,37 @@ Error Runner::generate(
     util::safe_printf(piece);
     fflush(stdout);
 
+    if(pos == 20) {
+      printf("\n");
+      ET_LOG(Info, "pos 20 token: %s", piece);
+    }
+
     if (token_callback) {
       token_callback(piece);
     }
 
     if (shouldStop_) {
       break;
+    }
+
+    // test rollback
+    if(pos > 50) {
+      // rollback
+      printf("\n");
+      ET_LOG(Info, "Rolling back to pos = 20");
+      pos = 20;
+
+      cur_token = embd[pos];
+
+      // remove all tokens after pos for embd
+      embd.resize(pos + 1);
+
+      // rollback kv_cache
+      module_->update_kv_cache_buffer(kv_cache_buffers[pos]);
+
+      // rollback start pos
+      auto start_pos = start_pos_managed.get_aliasing_tensor();
+      start_pos.mutable_data_ptr<int64_t>()[0] = pos;
     }
 
     // data-dependent terminating condition: we have n_eos_ number of EOS
