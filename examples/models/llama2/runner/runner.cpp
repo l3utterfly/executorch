@@ -535,20 +535,16 @@ Error Runner::start_repl(
           auto start_pos = start_pos_managed.get_aliasing_tensor();
           start_pos.mutable_data_ptr<int64_t>()[0] = pos;
         }
+
+        // if message is empty, we append the input suffix to start regen
+        if(message.length() == 0) {
+          message = input_suffix;
+        }
       }
 
       // Add tokens to embd only if the input buffer is non-empty
       if (message.length() > 0) {
         stats_.inference_start_ms = util::time_in_ms();
-
-        // prepend input prefix if any
-        // if we are regenerating with message, this means we are appending the edited system/assistant message, so we don't add an input prefix
-        if (replMsg.action != "REGEN" && !input_prefix.empty())
-          message = input_prefix + message;
-
-        // append input suffix if any
-        if (!input_suffix.empty())
-          message += input_suffix;
 
         // tokenize message without any bos or eos
         Result<std::vector<uint64_t>> encode_res =
