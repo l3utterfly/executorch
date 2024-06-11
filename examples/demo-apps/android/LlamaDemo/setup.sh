@@ -56,9 +56,11 @@ cmake extension/android \
 
 cmake --build "${CMAKE_OUT}"/extension/android -j "${CMAKE_JOBS}" --config Release
 
-BUILD_AAR_DIR="$(mktemp -d)"
-mkdir -p "${BUILD_AAR_DIR}/jni/${ANDROID_ABI}" "${BUILD_AAR_DIR}/libs"
-cp "${CMAKE_OUT}"/extension/android/libexecutorch_llama_jni.so "${BUILD_AAR_DIR}/jni/${ANDROID_ABI}"
+$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-debug ${CMAKE_OUT}/extension/android/libexecutorch_llama_jni.so"
+
+# BUILD_AAR_DIR="$(mktemp -d)"
+# mkdir -p "${BUILD_AAR_DIR}/jni/${ANDROID_ABI}" "${BUILD_AAR_DIR}/libs"
+# cp "${CMAKE_OUT}/extension/android/libexecutorch_llama_jni.so" "${BUILD_AAR_DIR}/jni/${ANDROID_ABI}"
 
 # build the aar
 # cp extension/android/build/libs/executorch.jar "${BUILD_AAR_DIR}/libs"
