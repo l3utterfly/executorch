@@ -18,11 +18,15 @@
 #include <executorch/extension/evalue_util/print_evalue.h>
 #include <executorch/extension/runner_util/managed_tensor.h>
 
+#include <algorithm> // For std::max
+#include <cstdint>
 #include <ctime>
+#include <filesystem> // C++17
+#include <fstream>
+#include <iostream>
+#include <map> // Include this header for std::map
 #include <memory>
 #include <sstream>
-#include <map> // Include this header for std::map
-#include <algorithm> // For std::max
 #include <vector> // For std::vector
 
 #ifdef USE_ATEN_LIB
@@ -40,6 +44,95 @@ static constexpr auto kTopp = 0.9f;
 void printReport(const Runner::Stats& stats);
 std::string statsToJsonString(const Runner::Stats& stats);
 } // namespace
+
+bool fileExists(const std::string& filename) {
+  return std::filesystem::exists(filename);
+}
+
+void loadKvCacheBuffers(
+    std::map<int, std::vector<uint8_t>>& kv_cache_buffers,
+    std::vector<uint64_t>& session_tokens,
+    const std::string& filename) {
+  if (!fileExists(filename)) {
+    // do nothing if the file does not exist
+    return;
+  }
+
+  std::ifstream ifs(filename, std::ios::binary);
+  if (!ifs) {
+    throw std::runtime_error("Error opening file for reading: " + filename);
+  }
+
+  kv_cache_buffers.clear();
+  session_tokens.clear();
+
+  // Load session tokens
+  size_t session_token_count;
+  ifs.read(
+      reinterpret_cast<char*>(&session_token_count),
+      sizeof(session_token_count));
+  session_tokens.resize(session_token_count);
+  ifs.read(
+      reinterpret_cast<char*>(session_tokens.data()),
+      session_token_count * sizeof(uint64_t));
+
+  // Load kv_cache_buffers
+  while (ifs) {
+    int key;
+    size_t buffer_size;
+
+    ifs.read(reinterpret_cast<char*>(&key), sizeof(key));
+    if (!ifs)
+      break; // Exit if we've reached the end of file
+
+    ifs.read(reinterpret_cast<char*>(&buffer_size), sizeof(buffer_size));
+    if (!ifs)
+      break; // Exit if we've reached the end of file
+
+    std::vector<uint8_t> buffer(buffer_size);
+    ifs.read(reinterpret_cast<char*>(buffer.data()), buffer_size);
+    if (!ifs)
+      break; // Exit if we've reached the end of file
+
+    kv_cache_buffers[key] = buffer;
+  }
+
+  ifs.close();
+}
+
+void saveKvCacheBuffers(
+    const std::map<int, std::vector<uint8_t>>& kv_cache_buffers,
+    const std::vector<uint64_t>& session_tokens,
+    const std::string& filename) {
+  std::ofstream ofs(
+      filename,
+      std::ios::binary | std::ios::trunc); // Open with trunc to overwrite
+  if (!ofs) {
+    throw std::runtime_error("Error opening file for writing: " + filename);
+  }
+
+  // Save session tokens
+  size_t session_token_count = session_tokens.size();
+  ofs.write(
+      reinterpret_cast<const char*>(&session_token_count),
+      sizeof(session_token_count));
+  ofs.write(
+      reinterpret_cast<const char*>(session_tokens.data()),
+      session_token_count * sizeof(uint64_t));
+
+  // Save kv_cache_buffers
+  for (const auto& pair : kv_cache_buffers) {
+    int key = pair.first;
+    const std::vector<uint8_t>& buffer = pair.second;
+    size_t buffer_size = buffer.size();
+
+    ofs.write(reinterpret_cast<const char*>(&key), sizeof(key));
+    ofs.write(reinterpret_cast<const char*>(&buffer_size), sizeof(buffer_size));
+    ofs.write(reinterpret_cast<const char*>(buffer.data()), buffer_size);
+  }
+
+  ofs.close();
+}
 
 Runner::Runner(
     const std::string& model_path,
@@ -243,332 +336,448 @@ Error Runner::start_repl(
     const std::string& antiPrompt,
     const int contextLength,
 
+    // logs and storage
+    std::string session_file,
+    std::string prompt_cache_file,
+
     // callbacks
     std::function<void(const std::string&)> token_callback,
     std::function<void(const std::string&)> system_msg_callback,
     std::function<void(const Stats&)> stats_callback) {
-  // Prepare the inputs.
-  // Use ones-initialized inputs.
-  ET_CHECK_MSG(!prompt.empty(), "Prompt cannot be null");
-  if (!is_loaded()) {
-    stats_.model_load_start_ms = util::time_in_ms();
-    ET_CHECK_OK_OR_RETURN_ERROR(load());
-    stats_.model_load_end_ms = util::time_in_ms();
-  }
+  try {
+    // Prepare the inputs.
+    // Use ones-initialized inputs.
+    ET_CHECK_MSG(!prompt.empty(), "Prompt cannot be null");
+    if (!is_loaded()) {
+      stats_.model_load_start_ms = util::time_in_ms();
+      ET_CHECK_OK_OR_RETURN_ERROR(load());
+      stats_.model_load_end_ms = util::time_in_ms();
+    }
 
-  // this is the context length
-  int seq_len = contextLength;
+    // this is the context length
+    int seq_len = contextLength;
 
-  // First token time only measures the time it takes to encode the prompt and
-  // return a response token.
-  shouldStop_ = false;
+    // First token time only measures the time it takes to encode the prompt and
+    // return a response token.
+    shouldStop_ = false;
 
-  // Set the sequence length to the max seq length if not provided
-  seq_len = (seq_len > 0 && seq_len <= max_seq_len_) ? seq_len : max_seq_len_;
+    // Set the sequence length to the max seq length if not provided
+    seq_len = (seq_len > 0 && seq_len <= max_seq_len_) ? seq_len : max_seq_len_;
 
-  Result<std::vector<uint64_t>> encode_res =
-      tokenizer_->encode(prompt, n_bos_, append_eos_ ? n_eos_ : 0);
+    Result<std::vector<uint64_t>> encode_res =
+        tokenizer_->encode(prompt, n_bos_, append_eos_ ? n_eos_ : 0);
 
-  ET_CHECK_OK_OR_RETURN_ERROR(
-      encode_res.error(), "Failed to encode prompt %s", prompt.c_str());
+    ET_CHECK_OK_OR_RETURN_ERROR(
+        encode_res.error(), "Failed to encode prompt %s", prompt.c_str());
 
-  // encode the (string) prompt into tokens sequence
-  std::vector<uint64_t> prompt_tokens = encode_res.get();
-  int initial_prompt_tokens = prompt_tokens.size();
+    // encode the (string) prompt into tokens sequence
+    std::vector<uint64_t> prompt_tokens = encode_res.get();
+    int initial_prompt_tokens = prompt_tokens.size();
 
-  system_msg_callback("REPL_LOG:seq_len=" + std::to_string(seq_len) + "\n");
-  system_msg_callback(
-      "REPL_LOG:max_seq_len_=" + std::to_string(max_seq_len_) + "\n");
-  system_msg_callback(
-      "REPL_LOG:initial_prompt_tokens=" + std::to_string(initial_prompt_tokens) +
-      "\n");
-
-  if (initial_prompt_tokens < 1) {
-    system_msg_callback("REPL_ERROR:Expected at least 1 prompt token");
-    return Error::Ok;
-  }
-  if (initial_prompt_tokens > max_seq_len_) {
-    system_msg_callback("REPL_ERROR:Max context length exceeded for this model");
-    return Error::Ok;
-  }
-  if (initial_prompt_tokens > seq_len) {
+    system_msg_callback("REPL_LOG:seq_len=" + std::to_string(seq_len) + "\n");
     system_msg_callback(
-        "REPL_ERROR:Prompt too long, increase the context length in your settings.");
-    return Error::Ok;
-  }
+        "REPL_LOG:max_seq_len_=" + std::to_string(max_seq_len_) + "\n");
+    system_msg_callback(
+        "REPL_LOG:initial_prompt_tokens=" +
+        std::to_string(initial_prompt_tokens) + "\n");
 
-  // start the main loop
-  int64_t pos = 0; // position in the sequence
-
-  std::vector<int64_t> token_data; // allocate space for the tokens
-  std::vector<exec_aten::SizesType> token_shape = {1, seq_len};
-
-  std::vector<int64_t> start_pos_data; // allocate space for the tokens
-  std::vector<exec_aten::SizesType> start_pos_shape = {1};
-
-  if (use_kv_cache_) {
-    // hard code these to size 1 as kv cache is locked to static size right now.
-    token_data.resize(1);
-    token_shape[1] = 1;
-    start_pos_data.resize(1);
-    start_pos_data.push_back(0);
-  } else {
-    // reserve data for tokens, notice the size is still 0 but the capacity is
-    // seq_len.
-    token_data.resize(seq_len);
-  }
-
-  // initialize tensor wrappers
-  ManagedTensor tokens_managed(
-      token_data.data(),
-      128, // TODO clean up unused 128 here as ManagedTensor ignores this arg in
-           // ctor
-      token_shape,
-      ScalarType::Long);
-  // Create with the max shape to approapriately set the capacity of this
-  // tensor, then resize back to 1 for first input.
-  tokens_managed.resize({1, 1});
-
-  ManagedTensor start_pos_managed(
-      start_pos_data.data(), 128, start_pos_shape, ScalarType::Long);
-
-  int64_t prev_token;
-  int64_t cur_token = prompt_tokens[0];
-
-  // If we arent using the kv cache then we can batch prefill the prompt
-  if (!use_kv_cache_) {
-    tokens_managed.resize({1, initial_prompt_tokens});
-    for (int i = 0; i < initial_prompt_tokens - 1; i++) {
-      tokens_managed.get_aliasing_tensor().mutable_data_ptr<int64_t>()[i] =
-          prompt_tokens[i];
+    if (initial_prompt_tokens < 1) {
+      system_msg_callback("REPL_ERROR:Expected at least 1 prompt token");
+      return Error::Ok;
     }
-    // prefill tokens up to the last prompt token and then enter the loop with
-    // the last promp token as the current token.
-    cur_token = prompt_tokens[initial_prompt_tokens - 1];
-    pos = initial_prompt_tokens - 1;
-
-    // Print the prompt for consistent output between single token prefill and
-    // batch prefill.
-    uint64_t prev = prompt_tokens[0];
-    uint64_t cur;
-    for (int i = 1; i < initial_prompt_tokens; i++) {
-      cur = prompt_tokens[i];
-      auto piece_res = tokenizer_->decode(prev, cur);
-      ET_CHECK_OK_OR_RETURN_ERROR(piece_res.error());
-      util::safe_printf(piece_res.get().c_str());
-      fflush(stdout);
-      prev = cur;
+    if (initial_prompt_tokens > max_seq_len_) {
+      system_msg_callback(
+          "REPL_ERROR:Max context length exceeded for this model");
+      return Error::Ok;
     }
-  }
-
-  // configs
-  std::string input_prefix = "<|start_header_id|>user<|end_header_id|>\n\n";
-  std::string input_suffix =
-      "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
-
-  if (system_msg_callback) {
-    system_msg_callback("REPL_LOG:starting repl...\n");
-  }
-  std::string last_output = "";
-  bool processingInitialPrompt = true;
-
-  // map of kv cache buffers (key = pos in sequence, value = kv cache buffer at), this is ordered by key by default
-  std::map<int, std::vector<uint8_t>> kv_cache_buffers;
-
-  // Generate our tokens
-  bool done = false;
-  while (!done) {
-    // Run the model
-    Result<torch::executor::Tensor> logits_res =
-        run_model_step(cur_token, tokens_managed, start_pos_managed, seq_len);
-
-    if (pos == initial_prompt_tokens) {
-      stats_.first_token_ms = util::time_in_ms();
-    } else if (pos == initial_prompt_tokens - 1) {
-      stats_.prompt_eval_end_ms = util::time_in_ms();
+    if (initial_prompt_tokens > seq_len) {
+      system_msg_callback(
+          "REPL_ERROR:Prompt too long, increase the context length in your settings.");
+      return Error::Ok;
     }
 
-    ET_CHECK_OK_OR_RETURN_ERROR(logits_res.error());
-    exec_aten::Tensor& logits_tensor = logits_res.get();
+    // start the main loop
+    int64_t pos = 0; // position in the sequence
 
-    prev_token = cur_token;
+    std::vector<int64_t> token_data; // allocate space for the tokens
+    std::vector<exec_aten::SizesType> token_shape = {1, seq_len};
 
-    long sample_start_time_ms = util::time_in_ms();
-    switch (logits_tensor.scalar_type()) {
-      case ScalarType::Float: {
-        cur_token = logitsToToken<float>(logits_tensor, pos, 0);
-        break;
+    std::vector<int64_t> start_pos_data; // allocate space for the tokens
+    std::vector<exec_aten::SizesType> start_pos_shape = {1};
+
+    if (use_kv_cache_) {
+      // hard code these to size 1 as kv cache is locked to static size right
+      // now.
+      token_data.resize(1);
+      token_shape[1] = 1;
+      start_pos_data.resize(1);
+      start_pos_data.push_back(0);
+    } else {
+      // reserve data for tokens, notice the size is still 0 but the capacity is
+      // seq_len.
+      token_data.resize(seq_len);
+    }
+
+    // initialize tensor wrappers
+    ManagedTensor tokens_managed(
+        token_data.data(),
+        128, // TODO clean up unused 128 here as ManagedTensor ignores this arg
+             // in ctor
+        token_shape,
+        ScalarType::Long);
+    // Create with the max shape to approapriately set the capacity of this
+    // tensor, then resize back to 1 for first input.
+    tokens_managed.resize({1, 1});
+
+    ManagedTensor start_pos_managed(
+        start_pos_data.data(), 128, start_pos_shape, ScalarType::Long);
+
+    int64_t prev_token;
+    int64_t cur_token = prompt_tokens[0];
+
+    // If we arent using the kv cache then we can batch prefill the prompt
+    if (!use_kv_cache_) {
+      tokens_managed.resize({1, initial_prompt_tokens});
+      for (int i = 0; i < initial_prompt_tokens - 1; i++) {
+        tokens_managed.get_aliasing_tensor().mutable_data_ptr<int64_t>()[i] =
+            prompt_tokens[i];
       }
-      case ScalarType::Half: {
-        cur_token = logitsToToken<exec_aten::Half>(logits_tensor, pos, 0);
-        break;
+      // prefill tokens up to the last prompt token and then enter the loop with
+      // the last promp token as the current token.
+      cur_token = prompt_tokens[initial_prompt_tokens - 1];
+      pos = initial_prompt_tokens - 1;
+
+      // Print the prompt for consistent output between single token prefill and
+      // batch prefill.
+      uint64_t prev = prompt_tokens[0];
+      uint64_t cur;
+      for (int i = 1; i < initial_prompt_tokens; i++) {
+        cur = prompt_tokens[i];
+        auto piece_res = tokenizer_->decode(prev, cur);
+        ET_CHECK_OK_OR_RETURN_ERROR(piece_res.error());
+        util::safe_printf(piece_res.get().c_str());
+        fflush(stdout);
+        prev = cur;
       }
-      default:
-        ET_CHECK_MSG(
-            false,
-            "Unsupported dtype output %hhd",
-            static_cast<int8_t>(logits_tensor.scalar_type()));
     }
-    stats_.aggregate_sampling_time_ms +=
-        util::time_in_ms() - sample_start_time_ms;
 
-    bool wait_for_input = false;
+    // configs
+    std::string input_prefix = "<|start_header_id|>user<|end_header_id|>\n\n";
+    std::string input_suffix =
+        "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
 
-    // advance the state machine
-    if (pos < prompt_tokens.size() - 1) {
-      // prefill, force the next token to be the next prompt token (overriding our inference above)
-      cur_token = prompt_tokens[pos + 1];
+    if (system_msg_callback) {
+      system_msg_callback("REPL_LOG:starting repl...\n");
+    }
+    std::string last_output = "";
+    bool processingInitialPrompt = true;
+
+    // map of kv cache buffers (key = pos in sequence, value = kv cache buffer
+    // at), this is ordered by key by default
+    std::map<int, std::vector<uint8_t>> kv_cache_buffers;
+    std::vector<uint64_t> session_tokens;
+
+    system_msg_callback("REPL_LOG:loading session: " + session_file + "\n");
+
+    loadKvCacheBuffers(kv_cache_buffers, session_tokens, session_file);
+
+    system_msg_callback(
+        "REPL_LOG:loaded session with " +
+        std::to_string(session_tokens.size()) + " tokens\n");
+
+    // if session tokens is empty, we try to load the prompt cache file
+    if(session_tokens.empty()) {
+      system_msg_callback("REPL_LOG:session is empty, trying to load prompt cache: " + prompt_cache_file + "\n");
+
+      loadKvCacheBuffers(kv_cache_buffers, session_tokens, prompt_cache_file);
 
       system_msg_callback(
-          "REPL_PROGRESS:" +
-          std::to_string((float)pos / (float)prompt_tokens.size()));
-    } else {
-      // append cur_token to the prompt_tokens
-      prompt_tokens.push_back(cur_token);
+          "REPL_LOG:loaded prompt cache with " +
+          std::to_string(session_tokens.size()) + " tokens\n");
+    }
 
-      // the first hit to this branch means we've finished the initial prompt
-      if (processingInitialPrompt) {
-        processingInitialPrompt = false;
-        wait_for_input = true;
+    // compare each session token with each prompt token
+    int latest_match_index = -1;
+    size_t min_size = std::min(prompt_tokens.size(), session_tokens.size());
+
+    for (size_t i = 0; i < min_size; ++i) {
+      if (prompt_tokens[i] != session_tokens[i]) {
+        break;
+      }
+
+      latest_match_index = i;
+    }
+
+    system_msg_callback(
+        "REPL_LOG:session tokens match prompt: " +
+        std::to_string(latest_match_index) + "/" +
+        std::to_string(prompt_tokens.size()) + "\n");
+
+    // remove all keys in the kv_cache_buffer that's greater than the latest
+    // match index
+    int max_kv_pos = -1;
+    for (auto it = kv_cache_buffers.begin(); it != kv_cache_buffers.end();) {
+      if (it->first > latest_match_index) {
+        it = kv_cache_buffers.erase(
+            it); // Erase and move the iterator to the next element
       } else {
-        // print the token as string, decode it with the Tokenizer object
-        auto piece_res = tokenizer_->decode(prev_token, cur_token);
-        ET_CHECK(piece_res.ok());
+        max_kv_pos = std::max(max_kv_pos, it->first);
+        ++it; // Move to the next element
+      }
+    }
 
-        last_output += piece_res.get();
+    system_msg_callback(
+        "REPL_LOG:latest position in the kv cache " +
+        std::to_string(max_kv_pos) + "\n");
 
-        if (token_callback) {
-          token_callback(piece_res.get());
+    // set the pos to the highest kv cache buffer position
+    if (max_kv_pos > 0) {
+      pos = max_kv_pos;
+
+      // update start pos tensor
+      auto start_pos = start_pos_managed.get_aliasing_tensor();
+      start_pos.mutable_data_ptr<int64_t>()[0] = pos;
+
+      // update the kv cache buffer
+      module_->update_kv_cache_buffer(kv_cache_buffers[pos]);
+    }
+
+    // Generate our tokens
+    bool done = false;
+    bool wait_for_input = false;
+
+    while (!done) {
+      // Run the model
+      Result<torch::executor::Tensor> logits_res =
+          run_model_step(cur_token, tokens_managed, start_pos_managed, seq_len);
+
+      if (pos == initial_prompt_tokens) {
+        stats_.first_token_ms = util::time_in_ms();
+      } else if (pos == initial_prompt_tokens - 1) {
+        stats_.prompt_eval_end_ms = util::time_in_ms();
+      }
+
+      ET_CHECK_OK_OR_RETURN_ERROR(logits_res.error());
+      exec_aten::Tensor& logits_tensor = logits_res.get();
+
+      prev_token = cur_token;
+
+      long sample_start_time_ms = util::time_in_ms();
+      switch (logits_tensor.scalar_type()) {
+        case ScalarType::Float: {
+          cur_token = logitsToToken<float>(logits_tensor, pos, 0);
+          break;
         }
-
-        // check for anti prompt
-        bool is_antiprompt = false;
-        if (!antiPrompt.empty()) {
-          // Check if each of the reverse prompts appears at the end of the
-          // output
-          size_t search_start_pos =
-              last_output.length() > static_cast<size_t>(antiPrompt.length())
-              ? last_output.length() - static_cast<size_t>(antiPrompt.length())
-              : 0;
-
-          if (last_output.find(antiPrompt, search_start_pos) !=
-              std::string::npos) {
-            wait_for_input = true;
-          }
+        case ScalarType::Half: {
+          cur_token = logitsToToken<exec_aten::Half>(logits_tensor, pos, 0);
+          break;
         }
+        default:
+          ET_CHECK_MSG(
+              false,
+              "Unsupported dtype output %hhd",
+              static_cast<int8_t>(logits_tensor.scalar_type()));
+      }
+      stats_.aggregate_sampling_time_ms +=
+          util::time_in_ms() - sample_start_time_ms;
 
-        // we have hit EOS, wait for user input
-        if (cur_token == eos_id_) {
+      // advance the state machine
+      if (pos < prompt_tokens.size() - 1) {
+        // prefill, force the next token to be the next prompt token (overriding
+        // our inference above)
+        cur_token = prompt_tokens[pos + 1];
+
+        system_msg_callback(
+            "REPL_PROGRESS:" +
+            std::to_string((float)pos / (float)prompt_tokens.size()));
+      } else {
+        // append cur_token to the prompt_tokens
+        prompt_tokens.push_back(cur_token);
+
+        // the first hit to this branch means we've finished the initial prompt
+        if (processingInitialPrompt) {
+          processingInitialPrompt = false;
           wait_for_input = true;
-        }
-      }
-    }
-    pos++;
 
-    // we save the kv cache buffer every 16 tokens
-    if (pos % 16 == 0) {
-      kv_cache_buffers[pos] = std::vector<uint8_t>(
-          module_->get_kv_cache_buffer().begin(),
-          module_->get_kv_cache_buffer().end());
-    }
+          // save the kv cache buffers
+          saveKvCacheBuffers(kv_cache_buffers, prompt_tokens, prompt_cache_file);
+        } else {
+          // print the token as string, decode it with the Tokenizer object
+          auto piece_res = tokenizer_->decode(prev_token, cur_token);
+          ET_CHECK(piece_res.ok());
 
-    if (wait_for_input) {
-      stats_.num_prompt_tokens = prompt_tokens.size();
-      stats_.num_generated_tokens = pos - prompt_tokens.size();
-      printReport(stats_);
-      if (stats_callback) {
-        stats_callback(stats_);
-      }
+          last_output += piece_res.get();
 
-      system_msg_callback("REPL_READY:");
+          if (token_callback) {
+            token_callback(piece_res.get());
+          }
 
-      ReplMsg replMsg;
-      messageQueue.wait_dequeue(replMsg);
+          // check for anti prompt
+          bool is_antiprompt = false;
+          if (!antiPrompt.empty()) {
+            // Check if each of the reverse prompts appears at the end of the
+            // output
+            size_t search_start_pos =
+                last_output.length() > static_cast<size_t>(antiPrompt.length())
+                ? last_output.length() -
+                    static_cast<size_t>(antiPrompt.length())
+                : 0;
 
-      std::string message = replMsg.msg;
-
-      // we receive a special kill message here to end the repl
-      if (message == "###KILL###")
-        done = true;
-
-      if (replMsg.action == "REGEN") {
-        // tokenize the input suffix
-        std::vector<uint64_t> input_suffix_tokens =
-            tokenizer_->encode(input_suffix, 0, 0).get();
-
-        // find the last input suffix in the prompt_tokens
-        auto it = std::find_end(prompt_tokens.begin(), prompt_tokens.end(), input_suffix_tokens.begin(), input_suffix_tokens.end());
-
-        // if we found it
-        if (it != prompt_tokens.end())
-        {
-          // move the iterator to the end of the input suffix
-          it += input_suffix_tokens.size();
-
-          // get the position of the last input suffix in the prompt tokens
-          pos = std::distance(prompt_tokens.begin(), it);
-
-          system_msg_callback("REPL_LOG:rolling back to the last input suffix at position " + std::to_string(pos) + "\n");
-
-          // we need to remove all the tokens after the input suffix (not including the input suffix)
-          prompt_tokens.erase(it, prompt_tokens.end());
-
-          int max_kv_pos = 0;
-
-          // loop through each key in the kv cache buffers map
-          for (auto it = kv_cache_buffers.begin(); it != kv_cache_buffers.end(); ) {
-            if (it->first > pos) {
-              it = kv_cache_buffers.erase(it); // Erase and move the iterator to the next element
-            } else {
-              max_kv_pos = std::max(max_kv_pos, it->first);
-              ++it; // Move to the next element
+            if (last_output.find(antiPrompt, search_start_pos) !=
+                std::string::npos) {
+              wait_for_input = true;
             }
           }
 
-          // set the pos to the highest kv cache buffer position
-          pos = max_kv_pos;
+          // we have hit EOS, wait for user input
+          if (cur_token == eos_id_) {
+            wait_for_input = true;
+          }
+        }
+      }
+      pos++;
 
-          // update the kv cache buffer
-          module_->update_kv_cache_buffer(kv_cache_buffers[pos]);
+      // we save the kv cache buffer every 16 tokens
+      if (pos % 16 == 0) {
+        kv_cache_buffers[pos] = std::vector<uint8_t>(
+            module_->get_kv_cache_buffer().begin(),
+            module_->get_kv_cache_buffer().end());
+      }
 
-          // rollback start pos
-          auto start_pos = start_pos_managed.get_aliasing_tensor();
-          start_pos.mutable_data_ptr<int64_t>()[0] = pos;
+      if (wait_for_input) {
+        stats_.num_prompt_tokens = prompt_tokens.size();
+        stats_.num_generated_tokens = pos - prompt_tokens.size();
+        printReport(stats_);
+        if (stats_callback) {
+          stats_callback(stats_);
         }
 
-        // if message is empty, we append the input suffix to start regen
-        if(message.length() == 0) {
-          message = input_suffix;
+        system_msg_callback("REPL_READY:");
+
+        // save the kv cache buffers
+        saveKvCacheBuffers(kv_cache_buffers, prompt_tokens, session_file);
+
+        ReplMsg replMsg;
+        messageQueue.wait_dequeue(replMsg);
+
+        wait_for_input = false;
+
+        std::string message = replMsg.msg;
+
+        // we receive a special kill message here to end the repl
+        if (message == "###KILL###")
+          done = true;
+
+        if (replMsg.action == "REGEN") {
+          // tokenize the input suffix
+          std::vector<uint64_t> input_suffix_tokens =
+              tokenizer_->encode(input_suffix, 0, 0).get();
+
+          // find the last input suffix in the prompt_tokens
+          auto it = std::find_end(
+              prompt_tokens.begin(),
+              prompt_tokens.end(),
+              input_suffix_tokens.begin(),
+              input_suffix_tokens.end());
+
+          // if we found it
+          if (it != prompt_tokens.end()) {
+            // move the iterator to the end of the input suffix
+            it += input_suffix_tokens.size();
+
+            // get the position of the last input suffix in the prompt tokens
+            pos = std::distance(prompt_tokens.begin(), it);
+
+            system_msg_callback(
+                "REPL_LOG:rolling back to the last input suffix at position " +
+                std::to_string(pos) + "\n");
+
+            // we need to remove all the tokens after the input suffix (not
+            // including the input suffix)
+            prompt_tokens.erase(it, prompt_tokens.end());
+
+            int max_kv_pos = 0;
+
+            // loop through each key in the kv cache buffers map to find the max
+            // kv position
+            for (auto it = kv_cache_buffers.begin();
+                 it != kv_cache_buffers.end();) {
+              if (it->first > pos) {
+                it = kv_cache_buffers.erase(
+                    it); // Erase and move the iterator to the next element
+              } else {
+                max_kv_pos = std::max(max_kv_pos, it->first);
+                ++it; // Move to the next element
+              }
+            }
+
+            // set the pos to the highest kv cache buffer position
+            pos = max_kv_pos;
+
+            // update the kv cache buffer
+            module_->update_kv_cache_buffer(kv_cache_buffers[pos]);
+
+            // rollback start pos
+            auto start_pos = start_pos_managed.get_aliasing_tensor();
+            start_pos.mutable_data_ptr<int64_t>()[0] = pos;
+          }
+
+          // if message is empty, we append the input suffix to start regen
+          if (message.length() == 0) {
+            message = input_suffix;
+          }
+        }
+
+        // Add tokens to embd only if the input buffer is non-empty
+        if (message.length() > 0) {
+          stats_.inference_start_ms = util::time_in_ms();
+
+          // tokenize message without any bos or eos
+          Result<std::vector<uint64_t>> encode_res =
+              tokenizer_->encode(message, 0, 0);
+
+          ET_CHECK_OK_OR_RETURN_ERROR(
+              encode_res.error(), "Failed to encode prompt %s", prompt.c_str());
+
+          // extend prompt_tokens with the new encoded message
+          std::vector<uint64_t> new_tokens = encode_res.get();
+          prompt_tokens.insert(
+              prompt_tokens.end(), new_tokens.begin(), new_tokens.end());
         }
       }
 
-      // Add tokens to embd only if the input buffer is non-empty
-      if (message.length() > 0) {
-        stats_.inference_start_ms = util::time_in_ms();
+      // check for system prompt that forces stop
+			// try to dequeue systemMessage
+			std::string systemMessage;
+			if (systemMessageQueue.try_dequeue(systemMessage))
+			{
+				// log
+				system_msg_callback("Processing system message: " + systemMessage + "\n");
 
-        // tokenize message without any bos or eos
-        Result<std::vector<uint64_t>> encode_res =
-            tokenizer_->encode(message, 0, 0);
+				// stops eval, and passes back to the user
+				if (systemMessage == "STOP") {
+          wait_for_input = true;
 
-        ET_CHECK_OK_OR_RETURN_ERROR(
-            encode_res.error(), "Failed to encode prompt %s", prompt.c_str());
+          // remove all prompt tokens after the current pos
+          prompt_tokens.erase(prompt_tokens.begin() + pos, prompt_tokens.end());
+        }
 
-        // extend prompt_tokens with the new encoded message
-        std::vector<uint64_t> new_tokens = encode_res.get();
-        prompt_tokens.insert(
-            prompt_tokens.end(), new_tokens.begin(), new_tokens.end());
-      }
+				// kills the repl
+				if (systemMessage == "KILL")
+					done = true;
+			}
+    }
+    stats_.inference_end_ms = util::time_in_ms();
+    printf("\n");
+
+    if (pos == seq_len) {
+      ET_LOG(Info, "Sequence length (%i tokens) reached!", seq_len);
     }
 
-    if (shouldStop_) {
-      done = true;
-    }
-  }
-  stats_.inference_end_ms = util::time_in_ms();
-  printf("\n");
-
-  if (pos == seq_len) {
-    ET_LOG(Info, "Sequence length (%i tokens) reached!", seq_len);
+    // final save of kv cache buffers
+    saveKvCacheBuffers(kv_cache_buffers, prompt_tokens, session_file);
+  } catch (const std::exception& e) {
+    system_msg_callback("REPL_ERROR:" + std::string(e.what()));
   }
 
   return Error::Ok;
@@ -695,7 +904,8 @@ Error Runner::generate(
 
     // copy the contents of kv cache at each step
     auto kv_cache_buffer = module_->get_kv_cache_buffer();
-    kv_cache_buffers[pos].assign(kv_cache_buffer.begin(), kv_cache_buffer.end()) ;
+    kv_cache_buffers[pos].assign(
+        kv_cache_buffer.begin(), kv_cache_buffer.end());
 
     // print the kv_cache
     // for (int i = 0; i < 204288; i++) {
@@ -752,7 +962,7 @@ Error Runner::generate(
     util::safe_printf(piece);
     fflush(stdout);
 
-    if(pos == 20) {
+    if (pos == 20) {
       printf("\n");
       ET_LOG(Info, "pos 20 token: %s", piece);
     }
@@ -766,7 +976,7 @@ Error Runner::generate(
     }
 
     // test rollback
-    if(pos > 50) {
+    if (pos > 50) {
       // rollback
       printf("\n");
       ET_LOG(Info, "Rolling back to pos = 20");
@@ -881,8 +1091,7 @@ std::string statsToJsonString(const Runner::Stats& stats) {
      << "\"prompt_eval_end_ms\":" << stats.prompt_eval_end_ms << ","
      << "\"first_token_ms\":" << stats.first_token_ms << ","
      << "\"aggregate_sampling_time_ms\":" << stats.aggregate_sampling_time_ms
-     << ","
-     << "\"SCALING_FACTOR_UNITS_PER_SECOND\":"
+     << "," << "\"SCALING_FACTOR_UNITS_PER_SECOND\":"
      << stats.SCALING_FACTOR_UNITS_PER_SECOND << "}";
   return ss.str();
 }

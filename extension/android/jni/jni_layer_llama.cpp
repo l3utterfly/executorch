@@ -137,18 +137,31 @@ class ExecuTorchLlamaJni
   }
 
   jint repl_start(
+    // model settings
       facebook::jni::alias_ref<jstring> prompt,
       facebook::jni::alias_ref<jstring> antiPrompt,
       jint contextLength,
+
+      // logs and storage
+      facebook::jni::alias_ref<jstring> session_file,
+      facebook::jni::alias_ref<jstring> prompt_cache_file,
+
+      // callbacks
       facebook::jni::alias_ref<ExecuTorchLlamaCallbackJni> callback) {
     // buffer to handle utf8 string conversion byte-by-byte
     std::string buffer;
 
     runner_->start_repl(
+        // model settings
         prompt->toStdString(),
         antiPrompt->toStdString(),
         contextLength,
+
+        // logs and storage
+        session_file->toStdString(),
+        prompt_cache_file->toStdString(),
         
+        // callbacks
         [buffer, &callback](std::string result) mutable {
           // Append the received bytes to the buffer.
           buffer.append(result);

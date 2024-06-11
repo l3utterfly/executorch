@@ -78,10 +78,16 @@ class Runner {
   void stop();
 
   Error start_repl(
+      // model settings
       const std::string& prompt,
       const std::string& antiPrompt,
       const int contextLength,
-      
+
+      // logs and storage
+      std::string session_file,
+      std::string prompt_cache_file,
+
+      // callbacks
       std::function<void(const std::string&)> token_callback,
       std::function<void(const std::string&)> system_msg_callback,
       std::function<void(const Stats&)> stats_callback);

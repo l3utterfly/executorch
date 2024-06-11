@@ -109,7 +109,10 @@ int32_t main(int32_t argc, char** argv) {
   std::string antiPrompt = "<|eot_id|>";
 
   // start repl in a separate thread
-  std::thread repl_thread(&::torch::executor::Runner::start_repl, &runner, my_prompt, antiPrompt, 8192, token_callback, system_msg_callback, stats_callback);
+  std::thread repl_thread(&::torch::executor::Runner::start_repl, &runner,
+      my_prompt, antiPrompt, 8192,
+      "session", "prompt_cache",
+      token_callback, system_msg_callback, stats_callback);
 
   // Wait for the REPL thread to finish
   repl_thread.join();
