@@ -10,8 +10,8 @@
             "request": "launch",
             "program": "${workspaceFolder}/cmake-out/examples/models/llama2/llama_main",
             "args": [
-                "--model-path", "/home/layla/src/executorch/Llama-3-Lumimaid-8B-v0.1-OAS_kv_sdpa_xnn_qe_4_32_ctx8192.pte",
-                "--tokenizer-path", "/home/layla/src/text-generation-webui/models/Meta-Llama-3-8B/original/tokenizer.model"
+                "--model-path", "/home/l3utterfly/models/L3-8B-Stheno-v3.2_kv2_sdpa_xnn_qe_4_32_ctx8192.pte",
+                "--tokenizer-path", "/home/l3utterfly/models/tokenizer.model"
             ],
             "cwd": "${workspaceFolder}",
         }

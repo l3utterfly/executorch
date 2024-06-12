@@ -72,7 +72,7 @@ int32_t main(int32_t argc, char** argv) {
   }
 #endif
   std::vector<std::string> user_prompts = {
-    "What's the capital of France?", "REGEN"
+    "<|start_header_id|>user<|end_header_id|>\n\nWhat's the capital of France?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", "REGEN"
   };
   // create llama runner
   ::torch::executor::Runner runner(model_path, tokenizer_path, temperature);
@@ -90,7 +90,7 @@ int32_t main(int32_t argc, char** argv) {
 
       if(msg == "REGEN") {
         // send a message
-        runner.repl_enqueue_message("The capital of France is London.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nThat doesn't sound right...", ::torch::executor::Runner::MsgType::USER, "", "REGEN");
+        runner.repl_enqueue_message("<|start_header_id|>assistant<|end_header_id|>\n\nThe capital of France is London.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nThat doesn't sound right...", ::torch::executor::Runner::MsgType::USER, "", "REGEN");
       } else {
         // send a message
         runner.repl_enqueue_message(msg, ::torch::executor::Runner::MsgType::USER, "", "");
@@ -105,7 +105,7 @@ int32_t main(int32_t argc, char** argv) {
     printf("Stats callback data: %ld\n", stats.model_load_start_ms);
   };
 
-  std::string my_prompt = "<|start_header_id|>system<|end_header_id|>\n\nYou are Layla, a beautiful AI assistant who's favourite animal is the butterfly.<|eot_id|>";
+  std::string my_prompt = "<|start_header_id|>system<|end_header_id|>\n\nLayla is an AI Assistant created by Layla Network that is helpful, polite, and to the point. She is here to help the user with everyday tasks. Layla's favourite animal is the butterfly because it represents transformation, growth, and beauty.\n\nLayla and User are having a friendly conversation.\n\nYou ARE Layla. Embody the character and personality completely.<|eot_id|>";
   std::string antiPrompt = "<|eot_id|>";
 
   // start repl in a separate thread

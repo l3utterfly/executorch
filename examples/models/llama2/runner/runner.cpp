@@ -486,8 +486,10 @@ Error Runner::start_repl(
         std::to_string(session_tokens.size()) + " tokens\n");
 
     // if session tokens is empty, we try to load the prompt cache file
-    if(session_tokens.empty()) {
-      system_msg_callback("REPL_LOG:session is empty, trying to load prompt cache: " + prompt_cache_file + "\n");
+    if (session_tokens.empty()) {
+      system_msg_callback(
+          "REPL_LOG:session is empty, trying to load prompt cache: " +
+          prompt_cache_file + "\n");
 
       loadKvCacheBuffers(kv_cache_buffers, session_tokens, prompt_cache_file);
 
@@ -533,13 +535,14 @@ Error Runner::start_repl(
     // set the pos to the highest kv cache buffer position
     if (max_kv_pos > 0) {
       pos = max_kv_pos;
-
-      // update start pos tensor
-      auto start_pos = start_pos_managed.get_aliasing_tensor();
-      start_pos.mutable_data_ptr<int64_t>()[0] = pos;
+      cur_token = prompt_tokens[pos];
 
       // update the kv cache buffer
       module_->update_kv_cache_buffer(kv_cache_buffers[pos]);
+
+      // rollback start pos
+      auto start_pos = start_pos_managed.get_aliasing_tensor();
+      start_pos.mutable_data_ptr<int64_t>()[0] = pos;
     }
 
     // Generate our tokens
@@ -600,7 +603,64 @@ Error Runner::start_repl(
           wait_for_input = true;
 
           // save the kv cache buffers
-          saveKvCacheBuffers(kv_cache_buffers, prompt_tokens, prompt_cache_file);
+          saveKvCacheBuffers(
+              kv_cache_buffers, prompt_tokens, prompt_cache_file);
+
+          // sanity check
+          std::map<int, std::vector<uint8_t>> loaded_kv_cache_buffers;
+          std::vector<uint64_t> loaded_session_tokens;
+
+          system_msg_callback(
+                "REPL_LOG:doing a sanity check of save and loaded kv cache buffers\n");
+
+          loadKvCacheBuffers(
+              loaded_kv_cache_buffers,
+              loaded_session_tokens,
+              prompt_cache_file);
+
+          // Check if the sizes of the maps are the same
+          if (kv_cache_buffers.size() != loaded_kv_cache_buffers.size()) {
+            system_msg_callback(
+                "REPL_LOG:sizes of kv_cache_buffers and loaded_kv_cache_buffers are different\n");
+          }
+
+          // Iterate through each key-value pair in kv_cache_buffers
+          for (const auto& pair : kv_cache_buffers) {
+            int key = pair.first;
+            const std::vector<uint8_t>& value1 = pair.second;
+
+            // Check if loaded_kv_cache_buffers contains the same key
+            auto it = loaded_kv_cache_buffers.find(key);
+            if (it == loaded_kv_cache_buffers.end()) {
+              system_msg_callback(
+                  "REPL_LOG:key " + std::to_string(key) +
+                  " not found in loaded_kv_cache_buffers\n");
+            }
+
+            // Get the corresponding value in loaded_kv_cache_buffers
+            const std::vector<uint8_t>& value2 = it->second;
+
+            // Check if the sizes of the vectors are the same
+            if (value1.size() != value2.size()) {
+              system_msg_callback(
+                  "REPL_LOG:sizes of value1 and value2 are different\n");
+            }
+
+            // Compare the contents of the vectors
+            if (!std::equal(value1.begin(), value1.end(), value2.begin())) {
+              system_msg_callback(
+                  "REPL_LOG:contents of value1 and value2 are different\n");
+            }
+          }
+
+          // Compare the contents of the prompt tokens and loaded session tokens
+          if (!std::equal(
+                  prompt_tokens.begin(),
+                  prompt_tokens.end(),
+                  loaded_session_tokens.begin())) {
+            system_msg_callback(
+                "REPL_LOG:contents of prompt_tokens and loaded_session_tokens are different\n");
+          }
         } else {
           // print the token as string, decode it with the Tokenizer object
           auto piece_res = tokenizer_->decode(prev_token, cur_token);
@@ -713,6 +773,7 @@ Error Runner::start_repl(
 
             // set the pos to the highest kv cache buffer position
             pos = max_kv_pos;
+            cur_token = prompt_tokens[pos];
 
             // update the kv cache buffer
             module_->update_kv_cache_buffer(kv_cache_buffers[pos]);
@@ -747,32 +808,28 @@ Error Runner::start_repl(
       }
 
       // check for system prompt that forces stop
-			// try to dequeue systemMessage
-			std::string systemMessage;
-			if (systemMessageQueue.try_dequeue(systemMessage))
-			{
-				// log
-				system_msg_callback("Processing system message: " + systemMessage + "\n");
+      // try to dequeue systemMessage
+      std::string systemMessage;
+      if (systemMessageQueue.try_dequeue(systemMessage)) {
+        // log
+        system_msg_callback(
+            "Processing system message: " + systemMessage + "\n");
 
-				// stops eval, and passes back to the user
-				if (systemMessage == "STOP") {
+        // stops eval, and passes back to the user
+        if (systemMessage == "STOP") {
           wait_for_input = true;
 
           // remove all prompt tokens after the current pos
           prompt_tokens.erase(prompt_tokens.begin() + pos, prompt_tokens.end());
         }
 
-				// kills the repl
-				if (systemMessage == "KILL")
-					done = true;
-			}
+        // kills the repl
+        if (systemMessage == "KILL")
+          done = true;
+      }
     }
     stats_.inference_end_ms = util::time_in_ms();
     printf("\n");
-
-    if (pos == seq_len) {
-      ET_LOG(Info, "Sequence length (%i tokens) reached!", seq_len);
-    }
 
     // final save of kv cache buffers
     saveKvCacheBuffers(kv_cache_buffers, prompt_tokens, session_file);
