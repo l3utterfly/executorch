@@ -402,64 +402,8 @@ Error Runner::start_repl(
     std::vector<int64_t> token_data; // allocate space for the tokens
     std::vector<exec_aten::SizesType> token_shape = {1, seq_len};
 
-    std::vector<int64_t> start_pos_data; // allocate space for the tokens
-    std::vector<exec_aten::SizesType> start_pos_shape = {1};
-
-    if (use_kv_cache_) {
-      // hard code these to size 1 as kv cache is locked to static size right
-      // now.
-      token_data.resize(1);
-      token_shape[1] = 1;
-      start_pos_data.resize(1);
-      start_pos_data.push_back(0);
-    } else {
-      // reserve data for tokens, notice the size is still 0 but the capacity is
-      // seq_len.
-      token_data.resize(seq_len);
-    }
-
-    // initialize tensor wrappers
-    ManagedTensor tokens_managed(
-        token_data.data(),
-        128, // TODO clean up unused 128 here as ManagedTensor ignores this arg
-             // in ctor
-        token_shape,
-        ScalarType::Long);
-    // Create with the max shape to approapriately set the capacity of this
-    // tensor, then resize back to 1 for first input.
-    tokens_managed.resize({1, 1});
-
-    ManagedTensor start_pos_managed(
-        start_pos_data.data(), 128, start_pos_shape, ScalarType::Long);
-
     int64_t prev_token;
     int64_t cur_token = prompt_tokens[0];
-
-    // If we arent using the kv cache then we can batch prefill the prompt
-    if (!use_kv_cache_) {
-      tokens_managed.resize({1, initial_prompt_tokens});
-      for (int i = 0; i < initial_prompt_tokens - 1; i++) {
-        tokens_managed.get_aliasing_tensor().mutable_data_ptr<int64_t>()[i] =
-            prompt_tokens[i];
-      }
-      // prefill tokens up to the last prompt token and then enter the loop with
-      // the last promp token as the current token.
-      cur_token = prompt_tokens[initial_prompt_tokens - 1];
-      pos = initial_prompt_tokens - 1;
-
-      // Print the prompt for consistent output between single token prefill and
-      // batch prefill.
-      uint64_t prev = prompt_tokens[0];
-      uint64_t cur;
-      for (int i = 1; i < initial_prompt_tokens; i++) {
-        cur = prompt_tokens[i];
-        auto piece_res = tokenizer_->decode(prev, cur);
-        ET_CHECK_OK_OR_RETURN_ERROR(piece_res.error());
-        util::safe_printf(piece_res.get().c_str());
-        fflush(stdout);
-        prev = cur;
-      }
-    }
 
     // configs
     std::string input_prefix = "<|start_header_id|>user<|end_header_id|>\n\n";
@@ -534,16 +478,44 @@ Error Runner::start_repl(
 
     // set the pos to the highest kv cache buffer position
     if (max_kv_pos > 0) {
+      //max_kv_pos = 16;
       pos = max_kv_pos;
       cur_token = prompt_tokens[pos];
 
       // update the kv cache buffer
-      module_->update_kv_cache_buffer(kv_cache_buffers[pos]);
-
-      // rollback start pos
-      auto start_pos = start_pos_managed.get_aliasing_tensor();
-      start_pos.mutable_data_ptr<int64_t>()[0] = pos;
+      auto buf = kv_cache_buffers.at(pos);
+      module_->update_kv_cache_buffer(buf);
     }
+
+    std::vector<int64_t> start_pos_data; // allocate space for the tokens
+    std::vector<exec_aten::SizesType> start_pos_shape = {1};
+
+    if (use_kv_cache_) {
+      // hard code these to size 1 as kv cache is locked to static size right
+      // now.
+      token_data.resize(1);
+      token_shape[1] = 1;
+      start_pos_data.resize(1);
+      start_pos_data.push_back(pos);
+    } else {
+      // reserve data for tokens, notice the size is still 0 but the capacity is
+      // seq_len.
+      token_data.resize(seq_len);
+    }
+
+    // initialize tensor wrappers
+    ManagedTensor tokens_managed(
+        token_data.data(),
+        128, // TODO clean up unused 128 here as ManagedTensor ignores this arg
+             // in ctor
+        token_shape,
+        ScalarType::Long);
+    // Create with the max shape to approapriately set the capacity of this
+    // tensor, then resize back to 1 for first input.
+    tokens_managed.resize({1, 1});
+
+    ManagedTensor start_pos_managed(
+        start_pos_data.data(), 128, start_pos_shape, ScalarType::Long);
 
     // Generate our tokens
     bool done = false;

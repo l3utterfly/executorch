@@ -90,7 +90,7 @@ int32_t main(int32_t argc, char** argv) {
 
       if(msg == "REGEN") {
         // send a message
-        runner.repl_enqueue_message("<|start_header_id|>assistant<|end_header_id|>\n\nThe capital of France is London.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nThat doesn't sound right...", ::torch::executor::Runner::MsgType::USER, "", "REGEN");
+        runner.repl_enqueue_message("<|start_header_id|>assistant<|end_header_id|>\n\nThe capital of France is London.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nThat doesn't sound right...<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", ::torch::executor::Runner::MsgType::USER, "", "REGEN");
       } else {
         // send a message
         runner.repl_enqueue_message(msg, ::torch::executor::Runner::MsgType::USER, "", "");
