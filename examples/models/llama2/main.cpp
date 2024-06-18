@@ -72,7 +72,7 @@ int32_t main(int32_t argc, char** argv) {
   }
 #endif
   std::vector<std::string> user_prompts = {
-    "<|start_header_id|>user<|end_header_id|>\n\nWho are you?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", "REGEN"
+    "<|start_header_id|>user<|end_header_id|>\n\nWhat's the capital of France?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", "REGEN"
   };
   // create llama runner
   ::torch::executor::Runner runner(model_path, tokenizer_path, temperature);

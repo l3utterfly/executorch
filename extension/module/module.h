@@ -192,7 +192,12 @@ class Module final {
   */
   __ET_NODISCARD
   void update_kv_cache_buffer(std::vector<uint8_t>& buffer) {
-    methods_.at("forward").planned_buffers[kv_cache_buffer_index_] = buffer;
+    // this function is UNSAFE, make sure input buffer size and planned buffer size are the same
+
+    // Copy the contents of the input buffer into the existing buffer
+    std::copy(buffer.begin(), buffer.end(), methods_.at("forward").planned_buffers[kv_cache_buffer_index_].begin());
+
+    // No need to update the span as the memory location and size remain unchanged
   }
 
   /**
@@ -207,7 +212,7 @@ class Module final {
     return event_tracer_.get();
   }
 
- private:
+ public:
   struct MethodHolder {
     std::vector<std::vector<uint8_t>> planned_buffers;
     std::vector<Span<uint8_t>> planned_spans;
@@ -216,7 +221,7 @@ class Module final {
     std::unique_ptr<Method> method;
   };
 
- private:
+ public:
   std::string file_path_;
   MlockConfig mlock_config_{MlockConfig::NoMlock};
   std::unique_ptr<DataLoader> data_loader_;

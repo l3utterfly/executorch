@@ -120,6 +120,7 @@ Error Module::load_method(const std::string& method_name) {
       method_holder.planned_spans.emplace_back(
           method_holder.planned_buffers.back().data(), buffer_size);
     }
+
     method_holder.planned_memory = std::make_unique<HierarchicalAllocator>(Span(
         method_holder.planned_spans.data(),
         method_holder.planned_spans.size()));
