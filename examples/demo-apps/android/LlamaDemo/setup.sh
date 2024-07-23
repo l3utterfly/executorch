@@ -20,7 +20,7 @@ cmake . -DCMAKE_INSTALL_PREFIX="${CMAKE_OUT}" \
   -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
   -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=ON \
   -DEXECUTORCH_BUILD_KERNELS_CUSTOM=ON \
-  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_BUILD_TYPE=MinSizeRel \
   -B"${CMAKE_OUT}"
 
 if [ "$(uname)" == "Darwin" ]; then
@@ -28,7 +28,7 @@ if [ "$(uname)" == "Darwin" ]; then
 else
   CMAKE_JOBS=$(( $(nproc) - 1 ))
 fi
-cmake --build "${CMAKE_OUT}" -j "${CMAKE_JOBS}" --target install --config Release
+cmake --build "${CMAKE_OUT}" -j "${CMAKE_JOBS}" --target install --config MinSizeRel
 
 cmake examples/models/llama2 \
          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
@@ -39,10 +39,10 @@ cmake examples/models/llama2 \
          -DEXECUTORCH_BUILD_KERNELS_CUSTOM=ON \
          -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
          -DEXECUTORCH_BUILD_XNNPACK=ON \
-         -DCMAKE_BUILD_TYPE=Release \
+         -DCMAKE_BUILD_TYPE=MinSizeRel \
          -B"${CMAKE_OUT}"/examples/models/llama2
 
-cmake --build "${CMAKE_OUT}"/examples/models/llama2 -j "${CMAKE_JOBS}" --config Release
+cmake --build "${CMAKE_OUT}"/examples/models/llama2 -j "${CMAKE_JOBS}" --config MinSizeRel
 
 cmake extension/android \
   -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
@@ -51,10 +51,10 @@ cmake extension/android \
   -DCMAKE_INSTALL_PREFIX="${CMAKE_OUT}" \
   -DEXECUTORCH_BUILD_LLAMA_JNI=ON \
   -DEXECUTORCH_USE_TIKTOKEN="${EXECUTORCH_USE_TIKTOKEN}" \
-  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_BUILD_TYPE=MinSizeRel \
   -B"${CMAKE_OUT}"/extension/android
 
-cmake --build "${CMAKE_OUT}"/extension/android -j "${CMAKE_JOBS}" --config Release
+cmake --build "${CMAKE_OUT}"/extension/android -j "${CMAKE_JOBS}" --config MinSizeRel
 
 $ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-debug ${CMAKE_OUT}/extension/android/libexecutorch_llama_jni.so
 
