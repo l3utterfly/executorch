@@ -227,7 +227,7 @@ class Module final {
    */
   Error set_output_data_ptr(Tensor& output_tensor, size_t output_index);
 
- private:
+ public:
   struct MethodHolder {
     std::vector<std::vector<uint8_t>> planned_buffers;
     std::vector<Span<uint8_t>> planned_spans;
@@ -236,7 +236,7 @@ class Module final {
     std::unique_ptr<Method> method;
   };
 
- private:
+ public:
   std::string file_path_;
   LoadMode load_mode_{LoadMode::MmapUseMlock};
   std::unique_ptr<DataLoader> data_loader_;

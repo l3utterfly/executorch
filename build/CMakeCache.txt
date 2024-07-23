@@ -14,6 +14,9 @@
 # EXTERNAL cache entries
 ########################
 
+//Build portable_ops library
+BUILD_EXECUTORCH_PORTABLE_OPS:BOOL=ON
+
 //Path to a program.
 CMAKE_ADDR2LINE:FILEPATH=/usr/bin/addr2line
 
@@ -293,6 +296,9 @@ EXECUTORCH_BUILD_ANDROID_JNI:BOOL=OFF
 //Build the Arm Baremetal flow for Cortex-M and Ethos-U
 EXECUTORCH_BUILD_ARM_BAREMETAL:BOOL=OFF
 
+//Build the Cadence DSP backend
+EXECUTORCH_BUILD_CADENCE:BOOL=OFF
+
 //Build the Core ML backend
 EXECUTORCH_BUILD_COREML:BOOL=OFF
 
@@ -358,6 +364,12 @@ EXECUTORCH_ENABLE_PROGRAM_VERIFICATION:BOOL=ON
 
 //Build with the given ET_MIN_LOG_LEVEL value
 EXECUTORCH_LOG_LEVEL:STRING=Info
+
+//Which PAL default implementation to use: one of {posix, minimal}
+EXECUTORCH_PAL_DEFAULT:STRING=posix
+
+//Use libdl library
+EXECUTORCH_USE_DL:BOOL=ON
 
 FXDIV_BUILD_BENCHMARKS:BOOL=OFF
 
@@ -431,6 +443,9 @@ pthreadpool_BINARY_DIR:STATIC=/home/l3utterfly/src/executorch/build/backends/xnn
 
 //Value Computed by CMake
 pthreadpool_IS_TOP_LEVEL:STATIC=OFF
+
+//Dependencies for the target
+pthreadpool_LIB_DEPENDS:STATIC=general;fxdiv;
 
 //Value Computed by CMake
 pthreadpool_SOURCE_DIR:STATIC=/home/l3utterfly/src/executorch/backends/xnnpack/third-party/pthreadpool
