@@ -10,7 +10,7 @@ import torch
 from executorch.exir.scalar_type import ScalarType
 from torch.library import impl, Library
 
-from .utils import get_conv1d_output_size
+from .utils import get_conv1d_output_size, get_conv2d_output_size
 
 lib = Library("cadence", "DEF")
 
@@ -31,7 +31,6 @@ lib.define(
 lib.define(
     "quantized_layer_norm(Tensor X, Tensor X_scale, Tensor X_zero_point, int[] normalized_shape, Tensor weight, Tensor bias, float eps, float output_scale, int output_zero_point) -> (Tensor Y)"
 )
-
 lib.define(
     "quantized_layer_norm.out(Tensor X, Tensor X_scale, Tensor X_zero_point, int[] normalized_shape, Tensor weight, Tensor bias, float eps, float output_scale, int output_zero_point, *, Tensor(a!) out) -> Tensor (a!)"
 )
@@ -44,7 +43,6 @@ lib.define(
 )
 
 lib.define("quantized_relu(Tensor X, Tensor X_zero_point) -> (Tensor Y)")
-
 lib.define(
     "quantized_relu.out(Tensor X, Tensor X_zero_point, *, Tensor(a!) out) -> Tensor (a!)"
 )
@@ -54,6 +52,13 @@ lib.define(
 )
 lib.define(
     "quantized_conv.out(Tensor input, Tensor weight, Tensor bias, int[] stride, SymInt[] padding, int[] dilation, int groups, int input_zero_point, Tensor weight_zero_point, Tensor bias_scale, float out_scale, int out_zero_point, Tensor out_multiplier, Tensor out_shift, bool channel_last=False, *, Tensor(a!) out) -> Tensor(a!)"
+)
+
+lib.define(
+    "quantized_matmul(Tensor X, int X_zero_point, Tensor Y, int Y_zero_point, Tensor? bias, int out_multiplier, int out_shift, int out_zero_point, bool transposed=False) -> (Tensor Z)"
+)
+lib.define(
+    "quantized_matmul.out(Tensor X, int X_zero_point, Tensor Y, int Y_zero_point, Tensor? bias, int out_multiplier, int out_shift, int out_zero_point, bool transposed=False, *, Tensor(a!) out) -> Tensor(a!)"
 )
 
 m = Library("cadence", "IMPL", "Meta")
@@ -122,7 +127,7 @@ def quantized_conv_meta(
     out_multiplier: torch.Tensor,
     out_shift: torch.Tensor,
     channel_last: bool = False,
-):
+) -> torch.Tensor:
     out_channels, _in_channels, *kernel_size = weight.shape
     in_size = input.shape
     # Assert that the input tensor has at least 3 dimensions, and at most 6
@@ -130,8 +135,14 @@ def quantized_conv_meta(
     assert len(in_size) < 6
 
     # Compute the output tensor size
-    output_size = get_conv1d_output_size(
-        in_size, out_channels, stride[0], padding[0], dilation[0], kernel_size[0]
+    output_size = (
+        get_conv1d_output_size(
+            in_size, out_channels, stride[1], padding[1], dilation[1], kernel_size[0]
+        )
+        if len(in_size) == 3
+        else get_conv2d_output_size(
+            in_size, out_channels, stride, padding, dilation, kernel_size, channel_last
+        )
     )
 
     return input.new_empty(output_size, dtype=input.dtype)
@@ -158,3 +169,45 @@ def quantized_relu_meta(
     X_zero_point: torch.Tensor,
 ):
     return X.new_empty(X.size(), dtype=torch.uint8)
+
+
+@impl(m, "quantized_matmul")
+def quantized_matmul_meta(
+    X: torch.Tensor,
+    X_zero_point: int,
+    Y: torch.Tensor,
+    Y_zero_point: int,
+    bias: Optional[torch.Tensor],
+    out_multiplier: int,
+    out_shift: int,
+    out_zero_point: int,
+    transposed: bool = False,
+) -> torch.Tensor:
+    X_size = list(X.size())
+    Y_size = list(Y.size())
+
+    assert len(X_size) == len(
+        Y_size
+    ), "quantized matmul not supported for tensors of different dimensions"
+
+    if len(X_size) == 3:
+        assert (
+            X_size[0] == Y_size[0]
+        ), "quantized matmul only supported for batch dimension of same size"
+        if transposed:
+            assert X_size[2] == Y_size[2], "matrices cannot be multiplied"
+            out_size = X_size[:2] + [Y_size[1]]
+        else:
+            assert X_size[2] == Y_size[1], "matrices cannot be multiplied"
+            out_size = X_size[:2] + [Y_size[2]]
+    elif len(X_size) == 2:
+        if transposed:
+            assert X_size[1] == Y_size[1], "matrices cannot be multiplied"
+            out_size = [X_size[0], Y_size[0]]
+        else:
+            assert X_size[1] == Y_size[0], "matrices cannot be multiplied"
+            out_size = [X_size[0], Y_size[1]]
+    else:
+        raise AssertionError("quantized matmul only supported for 2D or 3D tensors")
+
+    return X.new_empty(out_size, dtype=X.dtype)

@@ -35,6 +35,7 @@ build_executorch() {
     -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
     -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
     -DEXECUTORCH_BUILD_EXTENSION_RUNNER_UTIL=ON \
+    -DEXECUTORCH_BUILD_SDK=ON \
     -DEXECUTORCH_BUILD_VULKAN=$BUILD_VULKAN \
     -DEXECUTORCH_BUILD_XNNPACK=ON \
     -Bcmake-out
@@ -79,13 +80,20 @@ export_test_model() {
 build_and_run_test() {
   local test_dir=$1
   cmake "${test_dir}" \
+    -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_INSTALL_PREFIX=cmake-out \
     -DEXECUTORCH_USE_CPP_CODE_COVERAGE=ON \
     -DCMAKE_PREFIX_PATH="$(pwd)/third-party/googletest/build" \
     -Bcmake-out/"${test_dir}"
   cmake --build cmake-out/"${test_dir}" -j9
 
-  RESOURCES_PATH=$(realpath extension/module/test/resources)
+  if [[ "$test_dir" =~ .*examples/models/llama2/tokenizer.* ]]; then
+    RESOURCES_PATH=$(realpath examples/models/llama2/tokenizer/test/resources)
+  elif [[ "$test_dir" =~ .*extension/llm/tokenizer.* ]]; then
+    RESOURCES_PATH=$(realpath extension/llm/tokenizer/test/resources)
+  else
+    RESOURCES_PATH=$(realpath extension/module/test/resources)
+  fi
   export RESOURCES_PATH
 
   for t in cmake-out/"${test_dir}"/*test; do

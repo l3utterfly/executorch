@@ -120,16 +120,16 @@ class TestLinear(unittest.TestCase):
             ArmTester(
                 module,
                 example_inputs=test_data,
-                compile_spec=common.get_tosa_compile_spec(),
+                compile_spec=common.get_tosa_compile_spec(permute_memory_to_nhwc=False),
             )
             .export()
-            .check_count({"torch.ops.aten.addmm.default": 1})
+            .check_count({"torch.ops.aten.linear.default": 1})
             .check_not(["torch.ops.quantized_decomposed"])
             .to_edge(config=self._edge_compile_config)
             .partition()
             .check_count({"torch.ops.higher_order.executorch_call_delegate": 1})
             .to_executorch()
-            .run_method_and_compare_outputs()
+            .run_method_and_compare_outputs(inputs=test_data)
         )
 
     def _test_linear_tosa_BI_pipeline(
@@ -139,17 +139,17 @@ class TestLinear(unittest.TestCase):
             ArmTester(
                 module,
                 example_inputs=test_data,
-                compile_spec=common.get_tosa_compile_spec(),
+                compile_spec=common.get_tosa_compile_spec(permute_memory_to_nhwc=False),
             )
             .quantize()
             .export()
-            .check_count({"torch.ops.aten.addmm.default": 1})
+            .check_count({"torch.ops.aten.linear.default": 1})
             .check(["torch.ops.quantized_decomposed"])
             .to_edge(config=self._edge_compile_config)
             .partition()
             .check_count({"torch.ops.higher_order.executorch_call_delegate": 1})
             .to_executorch()
-            .run_method_and_compare_outputs(qtol=True)
+            .run_method_and_compare_outputs(inputs=test_data, qtol=True)
         )
 
     def _test_linear_tosa_u55_BI_pipeline(
@@ -159,11 +159,11 @@ class TestLinear(unittest.TestCase):
             ArmTester(
                 module,
                 example_inputs=test_data,
-                compile_spec=common.get_u55_compile_spec(),
+                compile_spec=common.get_u55_compile_spec(permute_memory_to_nhwc=False),
             )
             .quantize()
             .export()
-            .check_count({"torch.ops.aten.addmm.default": 1})
+            .check_count({"torch.ops.aten.linear.default": 1})
             .check(["torch.ops.quantized_decomposed"])
             .to_edge(config=self._edge_compile_config)
             .partition()

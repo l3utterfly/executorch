@@ -89,8 +89,10 @@ ATen operator with a dtype/dim order specialized kernel (works for `Double` dtyp
 ### Custom Ops C++ API
 
 For a custom kernel that implements a custom operator, we provides 2 ways to register it into ExecuTorch runtime:
-1. Using `EXECUTORCH_LIBRARY` and `WRAP_TO_ATEN` C++ macros.
-2. Using `functions.yaml` and codegen'd C++ libraries.
+1. Using `EXECUTORCH_LIBRARY` and `WRAP_TO_ATEN` C++ macros, covered by this section.
+2. Using `functions.yaml` and codegen'd C++ libraries, covered by [next section](#custom-ops-yaml-entry).
+
+Please refer to [Custom Ops Best Practices](#custom-ops-api-best-practices) on which API to use.
 
 The first option requires C++17 and doesn't have selective build support yet, but it's faster than the second option where we have to go through yaml authoring and build system tweaking.
 
@@ -216,7 +218,7 @@ ExecuTorch does not support all of the argument types that core PyTorch supports
 
 ### Build Tool Macros
 
-We provide build time macros to help users to build their kernel registration library. The macro takes the yaml file describing the kernel library as well as model operator metadata, and packages the generated C++ bindings into a C++ library. The macro is available on both CMake and Buck2.
+We provide build time macros to help users to build their kernel registration library. The macro takes the yaml file describing the kernel library as well as model operator metadata, and packages the generated C++ bindings into a C++ library. The macro is available on CMake.
 
 
 #### CMake
@@ -261,43 +263,27 @@ And out fallback:
 
 The merged yaml will have the entry in functions.yaml.
 
-#### Buck2
 
-`executorch_generated_lib` is the macro that takes the yaml files and depends on the selective build macro `et_operator_library`. For an example:
-```python
-# Yaml file for kernel library
-export_file(
-  name = "functions.yaml"
-)
+### Custom Ops API Best Practices
 
-# Kernel library
-cxx_library(
-  name = "add_kernel",
-  srcs = ["add.cpp"],
-)
+Given that we have 2 kernel registration APIs for custom ops, which API should we use? Here are some pros and cons for each API:
 
-# Selective build artifact, it allows all operators to be registered
-et_operator_library(
-  name = "all_ops",
-  include_all_ops = True, # Select all ops in functions.yaml
-)
+* C++ API:
+  - Pros:
+    * Only C++ code changes are needed
+    * Resembles PyTorch custom ops C++ API
+    * Low maintenance cost
+  - Cons:
+    * No selective build support
+    * No centralized bookkeepping
 
-# Prepare a generated_lib
-executorch_generated_lib(
-  name = "generated_lib",
-  functions_yaml_target = ":functions.yaml",
-  deps = [
-    ":all_ops",
-    ":add_kernel",
-  ],
-)
+* Yaml entry API:
+  - Pros:
+    * Has selective build support
+    * Provides a centralized place for custom ops
+      - It shows what ops are being registered and what kernels are bound to these ops, for an application
+  - Cons:
+    * User needs to create and maintain yaml files
+    * Relatively inflexible to change the op definition
 
-# Link generated_lib to ExecuTorch binary
-cxx_binary(
- name = "executorch_bin",
- deps = [
-  ":generated_lib",
- ],
-)
-
-```
+Overall if we are building an application and it uses custom ops, during the development phase it's recommended to use the C++ API since it's low-cost to use and flexible to change. Once the application moves to production phase where the custom ops definitions and the build systems are quite stable and binary size is to be considered, it is recommended to use the Yaml entry API.

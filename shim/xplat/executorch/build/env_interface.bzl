@@ -42,6 +42,7 @@ _EXTERNAL_DEPS = {
     "prettytable": "//third-party:prettytable",
     "pybind11": "//third-party:pybind11",
     "re2": [],  # TODO(larryliu0820): Add support
+    "sentencepiece-py": [],
     # Core C++ PyTorch functionality like Tensor and ScalarType.
     "torch-core-cpp": "//third-party:libtorch",
     "torchgen": "//third-party:torchgen",
@@ -129,6 +130,7 @@ def _remove_unsupported_kwargs(kwargs):
     kwargs.pop("tags", None)  # tags = ["long_running"] doesn't work in oss
     kwargs.pop("types", None)  # will have to find a different way to handle .pyi files in oss
     kwargs.pop("resources", None)  # doesn't support resources in python_library/python_binary yet
+    kwargs.pop("feature", None)  # internal-only, used for Product-Feature Hierarchy (PFH)
     return kwargs
 
 def _patch_headers(kwargs):
