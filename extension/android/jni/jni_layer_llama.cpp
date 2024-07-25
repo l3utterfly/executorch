@@ -127,9 +127,11 @@ class ExecuTorchLlamaJni
 
   jint generate(
       facebook::jni::alias_ref<jstring> prompt,
+      facebook::jni::alias_ref<jstring> grammarStr,
       facebook::jni::alias_ref<ExecuTorchLlamaCallbackJni> callback) {
     runner_->generate(
         prompt->toStdString(),
+        grammarStr->toStdString(),
         2048,
         [callback](std::string result) { callback->onResult(result); },
         [callback](const Runner::Stats& result) { callback->onStats(result); });

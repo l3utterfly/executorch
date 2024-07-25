@@ -237,7 +237,10 @@ T Runner::getMetadataHelper(const std::string& method_name, T default_val) {
   return res;
 }
 
-int32_t Runner::logitsToToken(const exec_aten::Tensor& logits_tensor) {
+int32_t Runner::logitsToToken(
+    const exec_aten::Tensor& logits_tensor,
+    torch::executor::Grammar* grammar,
+    const Tokenizer* tokenizer) {
   ET_CHECK_MSG(logits_tensor.dim() == 3, "Logits tensor must be 3D");
   auto num_tokens = logits_tensor.size(1);
 
@@ -246,14 +249,14 @@ int32_t Runner::logitsToToken(const exec_aten::Tensor& logits_tensor) {
       float* logits = logits_tensor.mutable_data_ptr<float>();
       float* logits_last = logits;
       logits_last += (num_tokens - 1) * tokenizer_->vocab_size();
-      return sampler_->sample(logits_last);
+      return sampler_->sample(logits_last, grammar, tokenizer);
     }
     case ScalarType::Half: {
       exec_aten::Half* logits =
           logits_tensor.mutable_data_ptr<exec_aten::Half>();
       exec_aten::Half* logits_last = logits;
       logits_last += (num_tokens - 1) * tokenizer_->vocab_size();
-      return sampler_->sample(logits_last);
+      return sampler_->sample(logits_last, grammar, tokenizer);
     }
     default:
       ET_CHECK_MSG(
@@ -523,6 +526,8 @@ Error Runner::start_repl(
       return Error::Ok;
     }
 
+    std::unique_ptr<torch::executor::Grammar> grammar = nullptr;
+
     // start the main loop
     int64_t pos = 0; // position in the sequence
 
@@ -604,6 +609,9 @@ Error Runner::start_repl(
         // clear last output
         last_output = "";
 
+        // clear grammar (std::unique frees the memory automatically)
+        grammar = nullptr;
+
         stats_.num_prompt_tokens = prompt_tokens.size();
         stats_.num_generated_tokens = pos - prompt_tokens.size();
         printReport(stats_);
@@ -622,6 +630,12 @@ Error Runner::start_repl(
         wait_for_input = false;
 
         std::string message = replMsg.msg;
+
+        // parse grammar
+        if (!replMsg.grammar.empty()) {
+          // this automatically frees the previous grammar
+          grammar = std::make_unique<torch::executor::Grammar>(replMsg.grammar);
+        }
 
         // we receive a special kill message here to end the repl
         if (message == "###KILL###")
@@ -701,10 +715,20 @@ Error Runner::start_repl(
 
       prev_token = cur_token;
 
+      torch::executor::Grammar* grammarPtr = nullptr;
+      if (grammar && pos >= prompt_tokens.size()) {
+        grammarPtr = grammar.get();
+      }
+
+      // process the logits tensor
       long sample_start_time_ms = util::time_in_ms();
-      cur_token = logitsToToken(logits_tensor);
+      cur_token = logitsToToken(logits_tensor, grammarPtr, tokenizer_.get());
       stats_.aggregate_sampling_time_ms +=
           util::time_in_ms() - sample_start_time_ms;
+
+      // accept the grammar token
+      if (grammarPtr != nullptr)
+        grammarPtr->accept_token(cur_token, tokenizer_.get());
 
       pos++;
 
@@ -732,7 +756,6 @@ Error Runner::start_repl(
       }
 
       // check for anti prompt
-      bool is_antiprompt = false;
       if (!antiPrompt.empty()) {
         // Check if each of the reverse prompts appears at the end of the
         // output
@@ -790,6 +813,7 @@ Error Runner::start_repl(
 
 Error Runner::generate(
     const std::string& prompt,
+    const std::string& grammarStr,
     int32_t seq_len,
     std::function<void(const std::string&)> token_callback,
     std::function<void(const Stats&)> stats_callback) {
@@ -842,6 +866,12 @@ Error Runner::generate(
 
   std::vector<int64_t> start_pos_data; // allocate space for the tokens
   std::vector<exec_aten::SizesType> start_pos_shape = {1};
+
+  // parse our grammar if we have one
+  std::unique_ptr<torch::executor::Grammar> grammar = nullptr;
+  if (!grammarStr.empty()) {
+    grammar = std::make_unique<torch::executor::Grammar>(grammarStr);
+  }
 
   token_data.resize(seq_len);
   if (use_kv_cache_) {
@@ -908,9 +938,14 @@ Error Runner::generate(
     prev_token = cur_token;
 
     long sample_start_time_ms = util::time_in_ms();
-    cur_token = logitsToToken(logits_tensor);
+    cur_token = logitsToToken(
+        logits_tensor, grammar ? grammar.get() : nullptr, tokenizer_.get());
     stats_.aggregate_sampling_time_ms +=
         util::time_in_ms() - sample_start_time_ms;
+
+    if (grammar != nullptr) {
+      grammar->accept_token(cur_token, tokenizer_.get());
+    }
 
     pos++;
 
@@ -923,34 +958,12 @@ Error Runner::generate(
     util::safe_printf(piece);
     fflush(stdout);
 
-    if (pos == 20) {
-      printf("\n");
-      ET_LOG(Info, "pos 20 token: %s", piece);
-    }
-
     if (token_callback) {
       token_callback(piece);
     }
 
     if (shouldStop_) {
       break;
-    }
-
-    // test rollback
-    if (pos > 50) {
-      // rollback
-      printf("\n");
-      ET_LOG(Info, "Rolling back to pos = 20");
-      pos = 20;
-
-      cur_token = embd[pos];
-
-      // remove all tokens after pos for embd
-      embd.resize(pos + 1);
-
-      // rollback start pos
-      auto start_pos = start_pos_managed.get_aliasing_tensor();
-      start_pos.mutable_data_ptr<int64_t>()[0] = pos;
     }
 
     // data-dependent terminating condition: we have n_eos_ number of EOS

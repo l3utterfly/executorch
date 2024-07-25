@@ -86,18 +86,11 @@ int32_t main(int32_t argc, char** argv) {
     printf("System message callback data: %s\n", data.c_str());
 
     if(data == "REPL_READY:") {
-      auto msg = user_prompts.front();
-
-      if(msg == "REGEN") {
-        // send a message
-        runner.repl_enqueue_message("<|start_header_id|>assistant<|end_header_id|>\n\nThe capital of France is London.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nThat doesn't sound right...<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", ::torch::executor::Runner::MsgType::USER, "", "REGEN");
-      } else {
-        // send a message
-        runner.repl_enqueue_message(msg, ::torch::executor::Runner::MsgType::USER, "", "");
-      }
-
-      // Remove the first element
-      user_prompts.erase(user_prompts.begin());
+      // send a message
+        runner.repl_enqueue_message("", ::torch::executor::Runner::MsgType::USER, R"(root ::= line "\\n"
+line ::= name ": " dialogue
+name ::= "Annie" | "James Thorne" | "Ruby Sterling"
+dialogue ::= [^\\n]+)", "");
     }
   };
 
@@ -105,8 +98,20 @@ int32_t main(int32_t argc, char** argv) {
     printf("Stats callback data: %ld\n", stats.model_load_start_ms);
   };
 
-  std::string my_prompt = "<|start_header_id|>system<|end_header_id|>\n\nLayla is an AI Assistant created by Layla Network that is helpful, polite, and to the point. She is here to help the user with everyday tasks. Layla's favourite animal is the butterfly because it represents transformation, growth, and beauty.\n\nLayla and User are having a friendly conversation.\n\nYou ARE Layla. Embody the character and personality completely.<|eot_id|>";
-  std::string antiPrompt = "<|eot_id|>";
+  std::string my_prompt = R"(Character descriptions:
+
+Annie is the cute girl of the class.
+
+James is the exasperated professor.
+
+Ruby is the spoiled brat.
+
+Professor James is teaching the class about history in the Victorian Era.
+
+The following is a roleplay scene between the characters:
+
+)";
+  std::string antiPrompt = "\n";
 
   // start repl in a separate thread
   std::thread repl_thread(&::torch::executor::Runner::start_repl, &runner,

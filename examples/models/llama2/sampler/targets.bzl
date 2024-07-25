@@ -8,12 +8,14 @@ def define_common_targets():
             name = "sampler" + aten_suffix,
             exported_headers = [
                 "sampler.h",
+                "grammar.h",
             ],
             preprocessor_flags = [
                 "-DUSE_ATEN_LIB",
             ] if aten else [],
             srcs = [
                 "sampler.cpp",
+                "grammar.cpp",
             ],
             visibility = [
                 "@EXECUTORCH_CLIENTS",

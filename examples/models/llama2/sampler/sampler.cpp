@@ -169,7 +169,15 @@ static float random_f32(unsigned long long* state) { // random float32 in [0,1)
 }
 
 template <typename T>
-int32_t Sampler::sample(T* logits) {
+int32_t Sampler::sample(T* logits,
+    torch::executor::Grammar* grammar,
+    const Tokenizer* tokenizer) {
+
+  if(grammar != nullptr) {
+    // sample from the grammar first
+    grammar->sample_grammar(logits, tokenizer);
+  }
+
   // sample the token given the logits and some hyperparameters
   int next;
   if (temperature_ == 0.0f) {
@@ -196,8 +204,12 @@ int32_t Sampler::sample(T* logits) {
   return next;
 }
 
-template int32_t Sampler::sample<float>(float* logits);
-template int32_t Sampler::sample<exec_aten::Half>(exec_aten::Half* logits);
+template int32_t Sampler::sample<float>(float* logits,
+    torch::executor::Grammar* grammar,
+    const Tokenizer* tokenizer);
+template int32_t Sampler::sample<exec_aten::Half>(exec_aten::Half* logits,
+    torch::executor::Grammar* grammar,
+    const Tokenizer* tokenizer);
 
 } // namespace executor
 } // namespace torch

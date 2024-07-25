@@ -91,6 +91,8 @@
         "alignedvector3": "cpp",
         "*.inc": "cpp",
         "span_ext": "cpp",
-        "gsl_util": "cpp"
+        "gsl_util": "cpp",
+        "strstream": "cpp",
+        "coroutine": "cpp"
     }
 }

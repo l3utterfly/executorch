@@ -18,6 +18,7 @@
 #include <torch/torch.h>
 #endif
 
+#include <executorch/examples/models/llama2/sampler/grammar.h>
 #include <executorch/runtime/core/exec_aten/exec_aten.h>
 
 namespace torch {
@@ -39,7 +40,10 @@ class Sampler {
       unsigned long long rng_seed);
 
   template <typename T>
-  int32_t sample(T* logits);
+  int32_t sample(
+      T* logits,
+      torch::executor::Grammar* grammar,
+      const Tokenizer* tokenizer);
 
  private:
   template <typename T>

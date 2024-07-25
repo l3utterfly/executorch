@@ -71,6 +71,7 @@ class Runner {
   Error load();
   Error generate(
       const std::string& prompt,
+      const std::string& grammarStr,
       int32_t seq_len = 128,
       std::function<void(const std::string&)> token_callback = {},
       std::function<void(const Stats&)> stats_callback = {});
@@ -102,7 +103,10 @@ class Runner {
   // metadata
   template <typename T>
   T getMetadataHelper(const std::string& method_name, T default_val);
-  int32_t logitsToToken(const exec_aten::Tensor& logits_tensor);
+  int32_t logitsToToken(
+      const exec_aten::Tensor& logits_tensor,
+      torch::executor::Grammar* grammar = nullptr,
+      const Tokenizer* tokenizer = nullptr);
   Result<torch::executor::Tensor> prefill(
       const std::vector<uint64_t>& tokens,
       ManagedTensor& managed_tokens,
