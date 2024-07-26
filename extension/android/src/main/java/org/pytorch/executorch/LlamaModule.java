@@ -43,7 +43,7 @@ public class LlamaModule {
    * @param llamaCallback callback object to receive results.
    */
   @DoNotStrip
-  public native int generate(String prompt, LlamaCallback llamaCallback);
+  public native int generate(String prompt, String grammarStr, LlamaCallback llamaCallback);
 
   @DoNotStrip
   public native int repl_start(
