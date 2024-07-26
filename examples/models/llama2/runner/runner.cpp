@@ -530,6 +530,7 @@ Error Runner::start_repl(
 
     // start the main loop
     int64_t pos = 0; // position in the sequence
+    uint32_t eot_id_ = 128009; // hard coded eot_id for llama3
 
     std::vector<int64_t> token_data; // allocate space for the tokens
     std::vector<exec_aten::SizesType> token_shape = {1, seq_len};
@@ -588,11 +589,6 @@ Error Runner::start_repl(
     }
     pos = num_prompt_tokens;
 
-    // configs
-    std::string input_prefix = "<|start_header_id|>user<|end_header_id|>\n\n";
-    std::string input_suffix =
-        "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
-
     if (system_msg_callback) {
       system_msg_callback("REPL_LOG:starting repl...\n");
     }
@@ -601,6 +597,8 @@ Error Runner::start_repl(
     bool done = false;
     bool wait_for_input = true; // start by waiting for input
     std::string last_output = "";
+    std::string input_suffix =
+        "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
 
     std::vector<uint8_t> last_buffer;
 
@@ -631,8 +629,19 @@ Error Runner::start_repl(
 
         std::string message = replMsg.msg;
 
+        if (system_msg_callback) {
+          system_msg_callback(
+              "REPL_LOG:received input message: " + message + "\n");
+        }
+
         // parse grammar
         if (!replMsg.grammar.empty()) {
+          if (system_msg_callback) {
+            system_msg_callback(
+                "REPL_LOG:received input with grammar: " + replMsg.grammar +
+                "\n");
+          }
+
           // this automatically frees the previous grammar
           grammar = std::make_unique<torch::executor::Grammar>(replMsg.grammar);
         }
@@ -698,6 +707,9 @@ Error Runner::start_repl(
           prompt_tokens.insert(
               prompt_tokens.end(), new_tokens.begin(), new_tokens.end());
 
+          system_msg_callback("REPL_LOG:current pos=" + std::to_string(pos) + "\n");
+          system_msg_callback("REPL_LOG:prompt token size=" + std::to_string(prompt_tokens.size()) + "\n");
+
           // if we have more prompt tokens than our current position, force the
           // current token to be from the prompt token
           if (pos < prompt_tokens.size()) {
@@ -716,7 +728,8 @@ Error Runner::start_repl(
       prev_token = cur_token;
 
       torch::executor::Grammar* grammarPtr = nullptr;
-      if (grammar && pos >= prompt_tokens.size()) {
+      if (grammar != nullptr && pos >= prompt_tokens.size() - 1) {
+        //system_msg_callback("REPL_LOG:applying grammar...\n");
         grammarPtr = grammar.get();
       }
 
@@ -744,13 +757,20 @@ Error Runner::start_repl(
               std::to_string((float)pos / (float)prompt_tokens.size()));
         }
       } else {
+        // push current token into prompt_tokens
+        prompt_tokens.push_back(cur_token);
+
         // print the token as string, decode it with the Tokenizer object
         auto piece_res = tokenizer_->decode(prev_token, cur_token);
         ET_CHECK(piece_res.ok());
 
         last_output += piece_res.get();
 
-        if (token_callback) {
+        if (system_msg_callback) {
+          system_msg_callback("REPL_LOG:output: " + piece_res.get() + "\n");
+        }
+
+        if (token_callback && cur_token != eos_id_ && cur_token != eot_id_) {
           token_callback(piece_res.get());
         }
       }
@@ -771,7 +791,7 @@ Error Runner::start_repl(
       }
 
       // we have hit EOS, wait for user input
-      if (cur_token == eos_id_) {
+      if (cur_token == eos_id_ || cur_token == eot_id_) {
         wait_for_input = true;
       }
 
@@ -860,6 +880,7 @@ Error Runner::generate(
 
   // start the main loop
   int64_t pos = 0; // position in the sequence
+  uint32_t eot_id_ = 128009; // hard coded eot_id for llama3
 
   std::vector<int64_t> token_data; // allocate space for the tokens
   std::vector<exec_aten::SizesType> token_shape = {1, seq_len};
@@ -958,7 +979,7 @@ Error Runner::generate(
     util::safe_printf(piece);
     fflush(stdout);
 
-    if (token_callback) {
+    if (token_callback && cur_token != eos_id_ && cur_token != eot_id_) {
       token_callback(piece);
     }
 
@@ -967,7 +988,8 @@ Error Runner::generate(
     }
 
     // data-dependent terminating condition: we have n_eos_ number of EOS
-    if (pos >= num_prompt_tokens && cur_token == eos_id_) {
+    if (pos >= num_prompt_tokens || cur_token == eos_id_ ||
+        cur_token == eot_id_) {
       printf("\n");
       ET_LOG(Info, "\nReached to the end of generation");
       break;

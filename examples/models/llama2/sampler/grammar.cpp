@@ -1110,6 +1110,13 @@ Grammar::Grammar(std::string grammar) {
   }
 }
 
+// destructor
+Grammar::~Grammar() {
+  if (grammar != nullptr) {
+    delete grammar;
+  }
+}
+
 template <typename T>
 void Grammar::sample_grammar(T* probabilities, const Tokenizer* tokenizer) {
   bool allow_eog = false;
@@ -1135,7 +1142,7 @@ void Grammar::sample_grammar(T* probabilities, const Tokenizer* tokenizer) {
 
     const std::string& piece = piece_res.get();
 
-    if (id == tokenizer->eos_tok()) {
+    if (id == tokenizer->eos_tok() || id == 128009) {
       if (!allow_eog) {
         probabilities[i] = -INFINITY;
       }
@@ -1167,7 +1174,8 @@ template void Grammar::sample_grammar<exec_aten::Half>(
 void Grammar::accept_token(uint32_t token, const Tokenizer* tokenizer) {
   assert(tokenizer != nullptr);
 
-  if (token == tokenizer->eos_tok()) {
+  // hardcoded EOT for llama3 for now
+  if (token == tokenizer->eos_tok() || token == 128009) {
     for (const auto& stack : grammar->stacks) {
       if (stack.empty()) {
         return;

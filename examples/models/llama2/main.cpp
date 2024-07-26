@@ -89,7 +89,7 @@ int32_t main(int32_t argc, char** argv) {
       // send a message
         runner.repl_enqueue_message("", ::torch::executor::Runner::MsgType::USER, R"(root ::= line "\\n"
 line ::= name ": " dialogue
-name ::= "Annie" | "James Thorne" | "Ruby Sterling"
+name ::= "Annie" | "James" | "Ruby"
 dialogue ::= [^\\n]+)", "");
     }
   };

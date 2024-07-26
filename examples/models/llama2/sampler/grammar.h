@@ -85,6 +85,7 @@ struct llama_grammar {
 class Grammar {
  public:
   Grammar(std::string grammar);
+  ~Grammar();
 
  public:
   template <typename T>
