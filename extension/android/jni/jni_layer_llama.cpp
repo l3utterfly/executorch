@@ -139,7 +139,7 @@ class ExecuTorchLlamaJni
   }
 
   jint repl_start(
-    // model settings
+      // model settings
       facebook::jni::alias_ref<jstring> prompt,
       facebook::jni::alias_ref<jstring> antiPrompt,
       jint contextLength,
@@ -162,7 +162,7 @@ class ExecuTorchLlamaJni
         // logs and storage
         session_file->toStdString(),
         prompt_cache_file->toStdString(),
-        
+
         // callbacks
         [buffer, &callback](std::string result) mutable {
           // Append the received bytes to the buffer.
@@ -200,8 +200,8 @@ class ExecuTorchLlamaJni
             // Remove the processed character from the buffer.
             buffer.erase(0, length);
           }
-          
-          if(response.size() > 0) {
+
+          if (response.size() > 0) {
             callback->onResult("REPL_MSG:" + response);
           }
         },
@@ -223,6 +223,19 @@ class ExecuTorchLlamaJni
     return 0;
   }
 
+  facebook::jni::local_ref<facebook::jni::JString> infer(
+      facebook::jni::alias_ref<jstring> prompt,
+      facebook::jni::alias_ref<jstring> grammarStr) {
+    Result<std::string> result =
+        runner_->infer(prompt->toStdString(), grammarStr->toStdString(), 2048);
+
+    if(!result.ok()) {
+      return facebook::jni::make_jstring("Error code: " + std::to_string((int)result.error()));
+    }
+    
+    return facebook::jni::make_jstring(result.get());
+  }
+
   void stop() {
     runner_->stop();
   }
@@ -238,6 +251,7 @@ class ExecuTorchLlamaJni
         makeNativeMethod("repl_start", ExecuTorchLlamaJni::repl_start),
         makeNativeMethod(
             "repl_enqueue_message", ExecuTorchLlamaJni::repl_enqueue_message),
+        makeNativeMethod("infer", ExecuTorchLlamaJni::infer),
         makeNativeMethod("stop", ExecuTorchLlamaJni::stop),
         makeNativeMethod("load", ExecuTorchLlamaJni::load),
     });

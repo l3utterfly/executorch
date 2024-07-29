@@ -707,8 +707,10 @@ Error Runner::start_repl(
           prompt_tokens.insert(
               prompt_tokens.end(), new_tokens.begin(), new_tokens.end());
 
-          system_msg_callback("REPL_LOG:current pos=" + std::to_string(pos) + "\n");
-          system_msg_callback("REPL_LOG:prompt token size=" + std::to_string(prompt_tokens.size()) + "\n");
+          system_msg_callback("REPL_LOG:current pos=" + std::to_string(pos));
+          system_msg_callback(
+              "REPL_LOG:prompt token size=" +
+              std::to_string(prompt_tokens.size()));
 
           // if we have more prompt tokens than our current position, force the
           // current token to be from the prompt token
@@ -729,7 +731,7 @@ Error Runner::start_repl(
 
       torch::executor::Grammar* grammarPtr = nullptr;
       if (grammar != nullptr && pos >= prompt_tokens.size() - 1) {
-        //system_msg_callback("REPL_LOG:applying grammar...\n");
+        // system_msg_callback("REPL_LOG:applying grammar...\n");
         grammarPtr = grammar.get();
       }
 
@@ -773,26 +775,26 @@ Error Runner::start_repl(
         if (token_callback && cur_token != eos_id_ && cur_token != eot_id_) {
           token_callback(piece_res.get());
         }
-      }
 
-      // check for anti prompt
-      if (!antiPrompt.empty()) {
-        // Check if each of the reverse prompts appears at the end of the
-        // output
-        size_t search_start_pos =
-            last_output.length() > static_cast<size_t>(antiPrompt.length())
-            ? last_output.length() - static_cast<size_t>(antiPrompt.length())
-            : 0;
+        // check for anti prompt
+        if (!antiPrompt.empty()) {
+          // Check if each of the reverse prompts appears at the end of the
+          // output
+          size_t search_start_pos =
+              last_output.length() > static_cast<size_t>(antiPrompt.length())
+              ? last_output.length() - static_cast<size_t>(antiPrompt.length())
+              : 0;
 
-        if (last_output.find(antiPrompt, search_start_pos) !=
-            std::string::npos) {
+          if (last_output.find(antiPrompt, search_start_pos) !=
+              std::string::npos) {
+            wait_for_input = true;
+          }
+        }
+
+        // we have hit EOS, wait for user input
+        if (cur_token == eos_id_ || cur_token == eot_id_) {
           wait_for_input = true;
         }
-      }
-
-      // we have hit EOS, wait for user input
-      if (cur_token == eos_id_ || cur_token == eot_id_) {
-        wait_for_input = true;
       }
 
       // check for system prompt that forces stop
@@ -829,6 +831,177 @@ Error Runner::start_repl(
   system_msg_callback("Executorch REPL exited");
 
   return Error::Ok;
+}
+
+Result<std::string> Runner::infer(
+    const std::string& prompt,
+    const std::string& grammarStr,
+    int32_t seq_len) {
+  // Prepare the inputs.
+  // Use ones-initialized inputs.
+  ET_CHECK_MSG(!prompt.empty(), "Prompt cannot be null");
+  if (!is_loaded()) {
+    stats_.model_load_start_ms = util::time_in_ms();
+    ET_CHECK_OK_OR_RETURN_ERROR(load());
+    stats_.model_load_end_ms = util::time_in_ms();
+  }
+
+  // First token time only measures the time it takes to encode the prompt and
+  // return a response token.
+
+  stats_.inference_start_ms = util::time_in_ms();
+
+  // Set the sequence length to the max seq length if not provided
+  seq_len = (seq_len > 0 && seq_len <= max_seq_len_) ? seq_len : max_seq_len_;
+
+  Result<std::vector<uint64_t>> encode_res =
+      tokenizer_->encode(prompt, n_bos_, append_eos_ ? n_eos_ : 0);
+
+  ET_CHECK_OK_OR_RETURN_ERROR(
+      encode_res.error(), "Failed to encode prompt %s", prompt.c_str());
+
+  // encode the (string) prompt into tokens sequence
+  std::vector<uint64_t> prompt_tokens = encode_res.get();
+  int num_prompt_tokens = prompt_tokens.size();
+
+  std::vector<uint64_t> embd;
+  embd.reserve(seq_len);
+  embd.resize(seq_len);
+
+  ET_CHECK_MSG(num_prompt_tokens >= 1, "Expected at least 1 prompt token");
+  ET_CHECK_MSG(
+      num_prompt_tokens < max_seq_len_,
+      "Max seq length exceeded - please increase max seq len value in .../llama2/model.py");
+
+  ET_CHECK_MSG(
+      num_prompt_tokens < seq_len,
+      "Sequence length exceeded - please increase the seq_len value passed to generate()");
+
+  // start the main loop
+  int64_t pos = 0; // position in the sequence
+  uint32_t eot_id_ = 128009; // hard coded eot_id for llama3
+
+  std::vector<int64_t> token_data; // allocate space for the tokens
+  std::vector<exec_aten::SizesType> token_shape = {1, seq_len};
+
+  std::vector<int64_t> start_pos_data; // allocate space for the tokens
+  std::vector<exec_aten::SizesType> start_pos_shape = {1};
+
+  // parse our grammar if we have one
+  std::unique_ptr<torch::executor::Grammar> grammar = nullptr;
+  if (!grammarStr.empty()) {
+    grammar = std::make_unique<torch::executor::Grammar>(grammarStr);
+  }
+
+  token_data.resize(seq_len);
+  if (use_kv_cache_) {
+    // hard code these to size 1 as kv cache is locked to static size right now.
+    start_pos_data.resize(1);
+    start_pos_data.push_back(0);
+  }
+
+  // initialize tensor wrappers
+  ManagedTensor tokens_managed(
+      token_data.data(), token_shape, ScalarType::Long);
+  // Create with the max shape to approapriately set the capacity of this
+  // tensor, then resize back to 1 for first input.
+  tokens_managed.resize({1, 1});
+
+  ManagedTensor start_pos_managed(
+      start_pos_data.data(), start_pos_shape, ScalarType::Long);
+
+  int64_t prev_token;
+  int64_t cur_token = prompt_tokens[0];
+
+  // Prefill first
+  // Here feed all tokens to the model and get the next predicted token
+  // after the prompt. After that we will enter generate loop.
+  auto prefill_res =
+      prefill(prompt_tokens, tokens_managed, start_pos_managed, nullptr);
+  ET_CHECK_OK_OR_RETURN_ERROR(prefill_res.error());
+  exec_aten::Tensor& prefill_res_tensor = prefill_res.get();
+  cur_token = logitsToToken(prefill_res_tensor);
+  if (use_kv_cache_) {
+    // Prefill could be parallel or sequential.
+    // Parallel:
+    //  kv cache:
+    //    - tokens_managed should resized to 1 as inference expects one token at
+    //    a time.
+    //  no kv cache:
+    //    - tokens_managed should be resized to prompt length + 1, as inference
+    //    expects all tokens at once.
+    // Sequential prefill:
+    //  kv cache:
+    //     - tokens_managed should be resized to 1, as inference expects one
+    //     token at a time.
+    //  no kv cache:
+    //     - tokens_managed should be resized to prompt length + 1, as inference
+    //     expects all tokens at once.
+    tokens_managed.resize({1, 1});
+  } else {
+    tokens_managed.resize({1, num_prompt_tokens + 1});
+  }
+  pos = num_prompt_tokens;
+
+  std::string infer_result = "";
+
+  // Generate our tokens
+  while (pos < seq_len - 1) {
+    // push cur token to embd (embd[pos] = cur_token)
+    embd[pos] = cur_token;
+
+    // Run the model
+    Result<torch::executor::Tensor> logits_res =
+        run_model_step(cur_token, tokens_managed, start_pos_managed, seq_len);
+
+    ET_CHECK_OK_OR_RETURN_ERROR(logits_res.error());
+    exec_aten::Tensor& logits_tensor = logits_res.get();
+
+    prev_token = cur_token;
+
+    long sample_start_time_ms = util::time_in_ms();
+    cur_token = logitsToToken(
+        logits_tensor, grammar ? grammar.get() : nullptr, tokenizer_.get());
+    stats_.aggregate_sampling_time_ms +=
+        util::time_in_ms() - sample_start_time_ms;
+
+    if (grammar != nullptr) {
+      grammar->accept_token(cur_token, tokenizer_.get());
+    }
+
+    pos++;
+
+    // print the token as string, decode it with the Tokenizer object
+    auto piece_res = tokenizer_->decode(prev_token, cur_token);
+    ET_CHECK(piece_res.ok());
+    const char* piece = piece_res.get().c_str();
+
+    // same as printf("%s", piece), but skips "unsafe" bytes
+    util::safe_printf(piece);
+    fflush(stdout);
+
+    if (cur_token != eos_id_ && cur_token != eot_id_) {
+      infer_result += piece;
+    }
+
+    // data-dependent terminating condition: we have n_eos_ number of EOS
+    if (cur_token == eos_id_ || cur_token == eot_id_) {
+      printf("\n");
+      ET_LOG(Info, "\nReached to the end of generation");
+      break;
+    }
+  }
+  stats_.inference_end_ms = util::time_in_ms();
+  printf("\n");
+
+  if (pos == seq_len) {
+    ET_LOG(Info, "Sequence length (%i tokens) reached!", seq_len);
+  }
+
+  stats_.num_prompt_tokens = num_prompt_tokens;
+  stats_.num_generated_tokens = pos - num_prompt_tokens;
+
+  return infer_result;
 }
 
 Error Runner::generate(
