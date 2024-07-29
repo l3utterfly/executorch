@@ -87,10 +87,16 @@ int32_t main(int32_t argc, char** argv) {
 
     if(data == "REPL_READY:") {
       // send a message
-        runner.repl_enqueue_message("", ::torch::executor::Runner::MsgType::USER, R"(root ::= line "\\n"
-line ::= name ": " dialogue
-name ::= "Annie" | "James" | "Ruby"
-dialogue ::= [^\\n]+)", "");
+        runner.repl_enqueue_message(R"(<|start_header_id|>user<|end_header_id|>
+
+Please remind me to take out the trash in an hour<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+)", ::torch::executor::Runner::MsgType::USER, R"(root ::= "I've created an event in your calendar to remind you of this! Here are the details:
+
+Event Name: " eventname "Time: " eventtime "Details: " eventdetail
+eventname ::= [^\n:]+ "\n"
+eventtime ::= [^\n:]+ "\n"
+eventdetail ::= [^\n:]+)", "");
     }
   };
 
@@ -98,20 +104,19 @@ dialogue ::= [^\\n]+)", "");
     printf("Stats callback data: %ld\n", stats.model_load_start_ms);
   };
 
-  std::string my_prompt = R"(Character descriptions:
+  std::string my_prompt = R"(<|start_header_id|>system<|end_header_id|>
 
-Annie is the cute girl of the class.
+Information about George: A handsome man.
 
-James is the exasperated professor.
+Layla is an AI Assistant created by "Layla Network" that is helpful, polite, and to the point. She is here to help George with everyday tasks. Layla's favourite animal is the butterfly because it represents transformation, growth, and beauty.
 
-Ruby is the spoiled brat.
+Layla and George are having a friendly conversation.
 
-Professor James is teaching the class about history in the Victorian Era.
+You ARE Layla. Embody the character and personality completely.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
-The following is a roleplay scene between the characters:
-
+Hello, I am Layla, your AI assistant. It is 7/30/2024 12:35:34 AM. How can I help you today?<|eot_id|>
 )";
-  std::string antiPrompt = "\n";
+  std::string antiPrompt = "<|eot_id|>";
 
   // start repl in a separate thread
   std::thread repl_thread(&::torch::executor::Runner::start_repl, &runner,
@@ -121,6 +126,19 @@ The following is a roleplay scene between the characters:
 
   // Wait for the REPL thread to finish
   repl_thread.join();
+
+  // test infer
+//   auto result = runner.infer(R"(<|start_header_id|>user<|end_header_id|>\n\nCreate a knowledge graph in JSON format detailing the relationships between George, Alice, Bob, and Charlie.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n)", R"(root ::= array
+// array  ::= "[" edge (", " edge)+ "]"
+// edge   ::= "{\"relationship\": \"" relations "\", \"subject\": \"" nouns "\", \"object\": \"" nouns "\"}"
+// nouns  ::= "George" | "Alice" | "Bob" | "Charlie"
+// relations  ::= "loves" | "hates" | "is friends with" | "is enemies with")", 2048);
+
+//   if (result.ok()) {
+//     printf("Infer result: %s\n", result.get().c_str());
+//   } else {
+//     printf("Infer failed\n");
+//   }
 
   return 0;
 }

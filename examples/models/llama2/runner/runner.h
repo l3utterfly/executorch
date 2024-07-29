@@ -99,6 +99,11 @@ class Runner {
       std::string grammar,
       std::string action);
 
+  Result<std::string> infer(
+      const std::string& prompt,
+      const std::string& grammarStr,
+      int32_t seq_len = 2048);
+
  private:
   // metadata
   template <typename T>
