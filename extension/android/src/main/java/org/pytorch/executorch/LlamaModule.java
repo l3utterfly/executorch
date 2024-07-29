@@ -60,6 +60,15 @@ public class LlamaModule {
   @DoNotStrip
   public native int repl_enqueue_message(String msg, int msgType, String grammar, String action);
 
+  /**
+   * Infer output form model
+   *
+   * @param prompt Input prompt
+   * @param grammarStr grammar (empty for none)
+   */
+  @DoNotStrip
+  public native String infer(String prompt, String grammarStr);
+
   /** Stop current generate() before it finishes. */
   @DoNotStrip
   public native void stop();
