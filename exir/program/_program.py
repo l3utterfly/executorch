@@ -193,8 +193,8 @@ def _transform(self, *passes: PassType) -> "ExportedProgram":
         range_constraints=_get_updated_range_constraints(transformed_gm),
         module_call_graph=copy.deepcopy(self._module_call_graph),
         example_inputs=self.example_inputs,
-        verifier=self.verifier,
         constants=self.constants,
+        verifiers=[self.verifier],
     )
     transformed_ep.graph_module.meta.update(self.graph_module.meta)
     transformed_ep.graph_module.meta.update(res.graph_module.meta)
@@ -225,7 +225,7 @@ def lift_constant_tensor_pass(ep):
         return ep
 
     graph_signature = ep.graph_signature
-    buffers = graph_signature.buffers
+    buffers = list(graph_signature.buffers)
 
     fake_mode = list(ep.graph.nodes)[0].meta["val"].fake_mode
     first_user_input = None
@@ -590,8 +590,8 @@ def _to_edge(ep, config: EdgeCompileConfig) -> "ExirExportedProgram":
                 range_constraints=ep.exported_program.range_constraints,
                 module_call_graph=ep.exported_program.module_call_graph,
                 example_inputs=ep.exported_program.example_inputs,
-                verifier=get_aten_verifier(enable=config._check_ir_validity),
                 constants=ep.exported_program.constants,
+                verifiers=[get_aten_verifier(enable=config._check_ir_validity)],
             ),
             False,
         )
@@ -626,11 +626,13 @@ def _to_edge(ep, config: EdgeCompileConfig) -> "ExirExportedProgram":
         range_constraints=new_ep.exported_program.range_constraints,
         module_call_graph=new_ep.exported_program.module_call_graph,
         example_inputs=new_ep.exported_program.example_inputs,
-        verifier=EXIREdgeDialectVerifier(
-            edge_compile_config=config,
-            class_only=True,
-        ),
         constants=new_ep.exported_program.constants,
+        verifiers=[
+            EXIREdgeDialectVerifier(
+                edge_compile_config=config,
+                class_only=True,
+            )
+        ],
     )
     new_ep.after_to_edge_passes = True
     return new_ep
@@ -708,12 +710,14 @@ def _generate_edge_program(
         range_constraints=program.range_constraints,
         module_call_graph=program.module_call_graph,
         example_inputs=program.example_inputs,
-        verifier=EXIREdgeDialectVerifier(
-            edge_compile_config=config,
-            class_only=True,
-            exception_list=ops_set_to_not_decompose,
-        ),
         constants=program.constants,
+        verifiers=[
+            EXIREdgeDialectVerifier(
+                edge_compile_config=config,
+                class_only=True,
+                exception_list=ops_set_to_not_decompose,
+            )
+        ],
     )
     # Lift the tensor constants created in ScalarToTensorPass
     edge_program = lift_constant_tensor_pass(edge_program)
@@ -895,7 +899,7 @@ def _gen_edge_manager_for_partitioners(
             # check on which ops need to be preserved and which ops need to be decomposed
             # Those which are truly preserved will be replaced with transformed ops
             ops_set_to_not_decompose_by_program[name] = (
-                _replace_aten_ops_with_transformed_ops(name, program, partitioner)
+                _replace_aten_ops_with_transformed_ops(name, program, partitioner) or []
             )
         program = program.run_decompositions(_default_decomposition_table())
 
@@ -978,8 +982,8 @@ def _to_edge_transform_and_lower(
 
     if not isinstance(partitioner, dict) and partitioner is not None:
         partitioner = {"forward": partitioner}
-    else:
-        partitioner = {}
+    elif partitioner is None:
+        partitioner = {"forward": []}
 
     edge_manager = _gen_edge_manager_for_partitioners(
         partitioner, aten_programs, config, constant_methods
