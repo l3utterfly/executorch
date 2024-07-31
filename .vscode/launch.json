@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/cmake-out/examples/models/llama2/llama_main",
             "args": [
-                "--model-path", "/mnt/d/models/executorch/Meta-Llama-3.1-8B-Instruct_kv2_sdpa_xnn_qe_4_32_ctx8192.pte",
+                "--model-path", "/mnt/d/models/Meta-Llama-3.1-8B-Instruct-executorch/Meta-Llama-3.1-8B-Instruct_kv2_sdpa_xnn_qe_4_32_ctx4096.pte",
                 "--tokenizer-path", "/mnt/d/models/executorch/tokenizer.model"
             ],
             "cwd": "${workspaceFolder}",
