@@ -21,6 +21,7 @@ ethos-u-scratch/
 executorch.egg-info
 pip-out/
 build-profiling/
+build-android/
 
 # Any exported models and profiling outputs
 *.bin
