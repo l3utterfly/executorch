@@ -22,6 +22,7 @@ executorch.egg-info
 pip-out/
 build-profiling/
 build-android/
+build-x86/
 
 # Any exported models and profiling outputs
 *.bin
