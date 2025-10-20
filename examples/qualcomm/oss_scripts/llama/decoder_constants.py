@@ -19,6 +19,7 @@ DECODER_MODEL_VERSION = {
     "phi_4_mini": "phi_4_mini",
     "llama3_2-1b_instruct": "llama3",
     "llama3_2-3b_instruct": "llama3",
+    "llama3_2-impish": "llama3",
     "qwen2_5-0_5b": "qwen2_5",
     "qwen2_5-1_5b": "qwen2_5",
     "qwen3-0_6b": "qwen3",

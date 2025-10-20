@@ -24,6 +24,7 @@ from executorch.backends.qualcomm.quantizer.qconfig import (
 )
 from executorch.backends.qualcomm.quantizer.quantizer import QuantDtype
 
+from executorch.examples.models.llama3_2 import convert_weights as convert_llama3_2_weights
 from executorch.examples.models.gemma import convert_weights as convert_gemma_weights
 from executorch.examples.models.gemma3 import convert_weights as convert_gemma3_weights
 from executorch.examples.models.phi_4_mini import (
@@ -282,6 +283,30 @@ class Llama3_2_3B_Instruct(LLMModelConfig):
     repo_id = None
     params_path = None
     convert_weights = None
+    transform_weight = True
+    # The Llama3_2 enabled should be instruct, however, Llama's tokenizer does not provide utility to apply chat template.
+    instruct_model = False
+
+    num_sharding = 4
+    # quant config
+    ptq = QuantDtype.use_16a4w_block
+    group_size = 32
+    masked_softmax = False
+    seq_mse_candidates = 0
+    r1 = False
+    r2 = False
+    r3 = False
+    custom_annotation = (
+        annotate_kv_8bit,
+        annotate_output_16a8w,
+    )
+    
+@register_llm_model("llama3_2-impish")
+@dataclass(init=False, frozen=True)
+class Llama3_2_3B_Instruct(LLMModelConfig):
+    repo_id = "SicariusSicariiStuff/Impish_LLAMA_3B"
+    params_path = None
+    convert_weights = convert_llama3_2_weights
     transform_weight = True
     # The Llama3_2 enabled should be instruct, however, Llama's tokenizer does not provide utility to apply chat template.
     instruct_model = False
