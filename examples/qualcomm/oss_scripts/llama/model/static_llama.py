@@ -536,12 +536,16 @@ class LlamaModel(nn.Module):
         output_k_cache = []
         output_v_cache = []
         # following tensors should be invariant across batches
-        freqs_cos = (
-            self.freqs_cos[input_pos][0] if self.use_kv_cache else self.freqs_cos
-        )
-        freqs_sin = (
-            self.freqs_sin[input_pos][0] if self.use_kv_cache else self.freqs_sin
-        )
+        bsz, seq_len = tokens.shape
+        if input_pos is not None:
+            # Decode phase: `input_pos` provides the positions for the new tokens.
+            # Using index_select is more robust for batching.
+            freqs_cos = self.freqs_cos.index_select(0, input_pos.view(-1))
+            freqs_sin = self.freqs_sin.index_select(0, input_pos.view(-1))
+        else:
+            # Prefill phase: We need frequencies for all positions from 0 to seq_len - 1.
+            freqs_cos = self.freqs_cos[:seq_len]
+            freqs_sin = self.freqs_sin[:seq_len]
 
         hidden_states = self.embedding_scale_factor * self.tok_embeddings(tokens)
         for ind, decoder_layer in enumerate(self.layers):

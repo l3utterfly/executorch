@@ -80,6 +80,12 @@ Default example using kv mode.
 python examples/qualcomm/oss_scripts/llama/llama.py -b build-android -s ${SERIAL_NUM} -m ${SOC_MODEL} --checkpoint consolidated.00.pth --params params.json --tokenizer_model tokenizer.model --decoder_model llama3_2-3b_instruct --model_mode kv --max_seq_len 1024 --prompt "I would like to learn python, could you teach me with a simple example?" --tasks wikitext --limit 1
 ```
 
+#### Impish_Llama_3B
+Default example using kv mode.
+```bash
+python examples/qualcomm/oss_scripts/llama/llama.py -b build-android -m SM8750 --decoder_model impish-llama-3b --model_mode kv --max_seq_len 2048 --prompt "I would like to learn python, could you teach me with a simple example?" --tasks wikitext --limit 1
+```
+
 #### Gemma 2B
 Default example using hybrid mode
 ```bash

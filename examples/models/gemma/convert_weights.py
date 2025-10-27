@@ -29,14 +29,32 @@ _GEMMA_TO_EXECUTORCH = {
 def gemma_to_executorch(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     """
     Convert the state dict so that it matches what ExecuTorch's transformer definition expects.
+    This version safely skips any keys from the source state_dict that are not defined
+    in the _GEMMA_TO_EXECUTORCH mapping.
     """
     converted_state_dict = {}
+    print(f"[*] Starting conversion. Found {len(state_dict)} keys in source file.")
+
     for key, value in state_dict.items():
-        new_key = get_mapped_key(key, _GEMMA_TO_EXECUTORCH)
-        converted_state_dict[new_key] = value
-    converted_state_dict["output.weight"] = converted_state_dict[
-        "tok_embeddings.weight"
-    ]
+        try:
+            # Try to convert the key
+            new_key = get_mapped_key(key, _GEMMA_TO_EXECUTORCH)
+            converted_state_dict[new_key] = value
+        except Exception:
+            # If get_mapped_key raises an error, it means the key is not in our map.
+            # We print a warning and simply skip it, effectively dropping the layer.
+            print(f"[*] WARNING: Skipping unexpected key: '{key}'")
+            pass
+
+    # This part remains the same, as it runs after the loop is complete.
+    # It ties the output projection weights to the token embeddings, which is standard.
+    if "tok_embeddings.weight" in converted_state_dict:
+        converted_state_dict["output.weight"] = converted_state_dict[
+            "tok_embeddings.weight"
+        ]
+        print("[*] Tied output.weight to tok_embeddings.weight.")
+    
+    print(f"[*] Conversion complete. Produced {len(converted_state_dict)} keys for the new model.")
     return converted_state_dict
 
 

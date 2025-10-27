@@ -2,9 +2,20 @@ import torch
 import argparse
 import sys
 
+def format_params(num_params: int) -> str:
+    """Formats a number into a human-readable string (e.g., 1.75B, 70.5M)."""
+    if num_params >= 1_000_000_000:
+        return f"{num_params / 1_000_000_000:.2f} B"
+    elif num_params >= 1_000_000:
+        return f"{num_params / 1_000_000:.2f} M"
+    elif num_params >= 1_000:
+        return f"{num_params / 1_000:.2f} K"
+    else:
+        return str(num_params)
+
 def print_state_dict_keys(filepath):
     """
-    Loads a .pth file and prints the keys of its state_dict.
+    Loads a .pth file and prints the keys, tensor shapes, and dtypes of its state_dict.
 
     Args:
         filepath (str): The path to the .pth file.
@@ -47,13 +58,37 @@ def print_state_dict_keys(filepath):
             print("[!] It does not have keys to print.")
             return
 
-        all_keys = list(state_dict.keys())
-        total_keys = len(all_keys)
+        # --- Enhanced Printing Logic ---
+        items = list(state_dict.items())
+        total_keys = len(items)
 
-        print(f"\n--- Found {total_keys} keys in the state_dict ---")
-        for key in all_keys:
-            print(key)
-        print("--------------------------------------------------\n")
+        if total_keys == 0:
+            print("\n--- State dict is empty ---")
+            return
+            
+        # Calculate padding for aligned printing
+        max_key_len = max(len(key) for key, _ in items)
+        total_params = 0
+
+        print(f"\n--- Found {total_keys} tensors in the state_dict ---\n")
+        print(f"{'Tensor Name':<{max_key_len}}   {'Shape':<25} {'Dtype':<15} {'Parameters'}")
+        print(f"{'-' * max_key_len}   {'-' * 25} {'-' * 15} {'-' * 10}")
+
+        for key, tensor in items:
+            if isinstance(tensor, torch.Tensor):
+                shape_str = str(list(tensor.shape))
+                dtype_str = str(tensor.dtype)
+                num_params = tensor.numel()
+                total_params += num_params
+                
+                print(f"{key:<{max_key_len}}   {shape_str:<25} {dtype_str:<15} {format_params(num_params)}")
+            else:
+                # Handle cases where a value might not be a tensor
+                print(f"{key:<{max_key_len}}   (Not a tensor, type: {type(tensor).__name__})")
+        
+        print("\n" + "=" * 80)
+        print(f"Total Parameters: {total_params:,} (~{format_params(total_params)})")
+        print("=" * 80 + "\n")
 
     except FileNotFoundError:
         print(f"[!] Error: File not found at '{filepath}'")
@@ -67,7 +102,7 @@ def print_state_dict_keys(filepath):
 if __name__ == "__main__":
     # Set up argument parser for command-line usage
     parser = argparse.ArgumentParser(
-        description="Inspect a .pth file and print the keys of its state_dict.",
+        description="Inspect a .pth file and print its tensor keys, shapes, dtypes, and total parameters.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument(

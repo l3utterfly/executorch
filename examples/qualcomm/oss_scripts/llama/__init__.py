@@ -280,10 +280,12 @@ class Llama3_2_1B_Instruct(LLMModelConfig):
 @register_llm_model("llama3_2-3b_instruct")
 @dataclass(init=False, frozen=True)
 class Llama3_2_3B_Instruct(LLMModelConfig):
-    repo_id = None
-    params_path = None
-    convert_weights = None
-    transform_weight = True
+    repo_id = "meta-llama/Llama-3.2-3B-Instruct"
+    params_path: str = os.path.join(
+        BASE_DIR, "../../../models/llama3_2/3b_config.json"
+    )
+    convert_weights = convert_llama3_2_weights
+    transform_weight = False
     # The Llama3_2 enabled should be instruct, however, Llama's tokenizer does not provide utility to apply chat template.
     instruct_model = False
 
@@ -301,11 +303,39 @@ class Llama3_2_3B_Instruct(LLMModelConfig):
         annotate_output_16a8w,
     )
     
-@register_llm_model("llama3_2-impish")
+@register_llm_model("impish-llama-3b")
 @dataclass(init=False, frozen=True)
-class Llama3_2_3B_Instruct(LLMModelConfig):
+class Impish_Llama_3B(LLMModelConfig):
     repo_id = "SicariusSicariiStuff/Impish_LLAMA_3B"
-    params_path = None
+    params_path: str = os.path.join(
+        BASE_DIR, "../../../models/llama3_2/3b_config.json"
+    )
+    convert_weights = convert_llama3_2_weights
+    transform_weight = False
+    # The Llama3_2 enabled should be instruct, however, Llama's tokenizer does not provide utility to apply chat template.
+    instruct_model = False
+
+    num_sharding = 4
+    # quant config
+    ptq = QuantDtype.use_16a4w_block
+    group_size = 32
+    masked_softmax = False
+    seq_mse_candidates = 0
+    r1 = False
+    r2 = False
+    r3 = False
+    custom_annotation = (
+        annotate_kv_8bit,
+        annotate_output_16a8w,
+    )
+    
+@register_llm_model("thea-rp-3b-25r")
+@dataclass(init=False, frozen=True)
+class Thea_RP_3B(LLMModelConfig):
+    repo_id = "lunahr/thea-rp-3b-25r"
+    params_path: str = os.path.join(
+        BASE_DIR, "../../../models/llama3_2/3b_config.json"
+    )
     convert_weights = convert_llama3_2_weights
     transform_weight = True
     # The Llama3_2 enabled should be instruct, however, Llama's tokenizer does not provide utility to apply chat template.
@@ -354,7 +384,7 @@ class Gemma_2B(LLMModelConfig):
         annotate_output_16a8w,
         partial(annotate_wv_sha, quantization_config=quantization_config_wv_sha_16a8w),
     )
-
+    
 
 @register_llm_model("gemma3-1b")
 @dataclass(init=False, frozen=True)

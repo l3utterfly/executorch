@@ -1275,15 +1275,17 @@ def export_llama(args) -> None:
             args.tokenizer_bin is not None
         ), "Please provide tokenizer_bin for stories."
         runtime_tokenizer_path = args.tokenizer_bin
-    elif "llama3_2" in args.decoder_model:
-        tokenizer = get_tokenizer(args.tokenizer_model)
-        assert isinstance(
-            tokenizer, TiktokenTokenizer
-        ), f"Wrong tokenizer provided for llama3_2."
-        runtime_tokenizer_path = args.tokenizer_model
+    # elif "llama3_2" in args.decoder_model:
+    #     tokenizer = get_tokenizer(args.tokenizer_model)
+    #     assert isinstance(
+    #         tokenizer, TiktokenTokenizer
+    #     ), f"Wrong tokenizer provided for llama3_2."
+    #     runtime_tokenizer_path = args.tokenizer_model
     elif args.decoder_model in SUPPORTED_LLM_MODELS:
         model_id = decoder_model_config.repo_id
+        
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+            
         chat_template = (
             tokenizer.apply_chat_template
             if hasattr(tokenizer, "apply_chat_template")
@@ -1298,6 +1300,7 @@ def export_llama(args) -> None:
         else:
             runtime_tokenizer_path = tokenizer_artifacts[-1]
         tokenizer = get_tokenizer(runtime_tokenizer_path, tokenizer_config)
+            
 
     # TODO: Remove this once error is resolved.
     if args.decoder_model == "phi_4_mini":
